@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>劳务排班核对系统</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+</head>
+<body>
+    <header class="header">
+        <div class="brand">
+            <div class="brand-icon"><i class="ri-calendar-check-line"></i></div>
+            <div class="brand-text">
+                <h1>劳务排班核对系统</h1>
+                <p>按公司、班次和岗位快速核对计划与实到</p>
+                <p id="storage-location-hint" class="storage-location-hint" hidden></p>
+            </div>
+        </div>
+
+        <div class="header-right">
+            <div class="user-info">
+                <span id="current-user-avatar" class="avatar-sm">Admin</span>
+                <button class="btn-text" id="btn-change-password">修改密码</button>
+                <button class="btn-text admin-only" id="btn-user-mgmt">用户管理</button>
+                <button class="btn-text" id="btn-logout">退出</button>
+            </div>
+        </div>
+    </header>
+
+    <main class="container">
+        <section class="stats-grid">
+            <article class="stat-card">
+                <span class="stat-label" id="stat-label-plan">计划总数</span>
+                <span id="stat-total" class="stat-value">0</span>
+            </article>
+            <article class="stat-card">
+                <span class="stat-label" id="stat-label-actual">实到总数</span>
+                <span id="stat-total-actual" class="stat-value">0</span>
+            </article>
+            <article class="stat-card stat-card-diff">
+                <span class="stat-label" id="stat-label-diff">差异</span>
+                <span id="stat-total-diff" class="stat-value">0</span>
+            </article>
+        </section>
+
+        <section class="toolbar">
+            <div class="control-block">
+                <label for="company-filter">劳务公司</label>
+                <select id="company-filter">
+                    <option value="ALL">显示全部</option>
+                </select>
+            </div>
+
+            <div class="control-block control-grow">
+                <label for="shift-search-input">班次筛选</label>
+                <div class="shift-search-wrap">
+                    <input type="text" id="shift-search-input" list="shift-options-list" placeholder="输入班次关键词筛选..." autocomplete="off">
+                    <button type="button" id="shift-picker-btn" class="shift-picker-btn" aria-label="展开班次下拉"><i class="ri-arrow-down-s-line"></i></button>
+                </div>
+                <div id="shift-selected-tags" class="shift-selected-tags"></div>
+                <datalist id="shift-options-list"></datalist>
+            </div>
+
+            <div class="control-block control-grow">
+                <label for="search-input">岗位搜索</label>
+                <div class="role-search-wrap">
+                    <input type="text" id="search-input" list="role-options-list" placeholder="输入岗位或工作内容..." autocomplete="off">
+                    <button type="button" id="role-picker-btn" class="role-picker-btn" aria-label="展开岗位下拉"><i class="ri-arrow-down-s-line"></i></button>
+                </div>
+                <datalist id="role-options-list"></datalist>
+            </div>
+
+            <div class="control-block">
+                <label for="pay-type-filter">计薪类型</label>
+                <select id="pay-type-filter">
+                    <option value="ALL">全部</option>
+                    <option value="计时">计时</option>
+                    <option value="计件">计件</option>
+                </select>
+            </div>
+
+            <div class="control-block control-grow">
+                <label for="history-select">历史查询（保存时间）</label>
+                <div class="history-search-wrap">
+                    <select id="history-select">
+                        <option value="">最新数据</option>
+                    </select>
+                    <button type="button" id="btn-history-load" class="days-action-btn">查询</button>
+                    <button type="button" id="btn-history-clear" class="days-action-btn">回到最新</button>
+                </div>
+            </div>
+
+            <div class="control-block control-days">
+                <div class="control-days-header">
+                    <span class="control-label">显示日期</span>
+                    <div class="days-actions">
+                        <button type="button" id="btn-days-select-all" class="days-action-btn">全选</button>
+                        <button type="button" id="btn-days-clear-all" class="days-action-btn">取消全选</button>
+                    </div>
+                </div>
+                <div class="checkbox-group" id="date-columns-filter">
+                    <label><input type="checkbox" value="星期一" checked> 一</label>
+                    <label><input type="checkbox" value="星期二" checked> 二</label>
+                    <label><input type="checkbox" value="星期三" checked> 三</label>
+                    <label><input type="checkbox" value="星期四" checked> 四</label>
+                    <label><input type="checkbox" value="星期五" checked> 五</label>
+                    <label><input type="checkbox" value="星期六" checked> 六</label>
+                    <label><input type="checkbox" value="星期日" checked> 日</label>
+                </div>
+            </div>
+
+            <div class="action-group">
+                <button class="btn btn-secondary" id="btn-add-record"><i class="ri-add-line"></i> 新增</button>
+                <button class="btn btn-save" id="btn-save-records" disabled><i class="ri-check-line"></i> 提交保存</button>
+                <button class="btn btn-outline" id="btn-screenshot-mode"><i class="ri-image-line"></i> 截图模式</button>
+                <button class="btn btn-outline" id="btn-export"><i class="ri-file-excel-line"></i> 导出</button>
+            </div>
+        </section>
+
+        <section class="shift-headcount-banner" id="shift-headcount-banner" hidden aria-live="polite">
+            <div class="shift-headcount-inner">
+                <span class="shift-headcount-label">本班次到场人数合计（实到）</span>
+                <span class="shift-headcount-value-wrap">
+                    <strong id="shift-headcount-value" class="shift-headcount-value">0</strong>
+                    <span class="shift-headcount-unit">人</span>
+                </span>
+            </div>
+            <p class="shift-headcount-desc" id="shift-headcount-desc"></p>
+        </section>
+
+        <section class="table-card">
+            <table class="schedule-table" id="schedule-table">
+                <!-- Table generated by JS -->
+            </table>
+        </section>
+    </main>
+
+    <button class="btn btn-outline screenshot-exit-btn" id="screenshot-exit" hidden aria-hidden="true">
+        <i class="ri-close-line"></i> 退出截图模式
+    </button>
+
+    <!-- Modals -->
+    <div class="modal" id="login-modal">
+        <div class="modal-content">
+            <h3>登录系统</h3>
+            <label class="modal-field-label" for="login-account-set">账套</label>
+            <select id="login-account-set">
+                <option value="CNO.H">CNO.H</option>
+                <option value="SFO.H">SFO.H</option>
+            </select>
+            <input type="text" id="login-username" placeholder="账号">
+            <input type="password" id="login-password" placeholder="密码">
+            <button class="btn btn-primary" id="btn-login">登录</button>
+        </div>
+    </div>
+
+    <div class="modal" id="add-record-modal">
+        <div class="modal-content modal-wide">
+            <h3>新增排班记录</h3>
+            <label class="modal-field-label" for="add-company">劳务公司</label>
+            <input type="text" id="add-company" placeholder="例如：J&S">
+            <label class="modal-field-label" for="add-shift">班次名称</label>
+            <input type="text" id="add-shift" placeholder="默认：常规班次">
+            <label class="modal-field-label" for="add-role">岗位内容（必填）</label>
+            <input type="text" id="add-role" placeholder="岗位或工作内容">
+            <label class="modal-field-label" for="add-note">备注（可选）</label>
+            <input type="text" id="add-note" placeholder="说明、组数等">
+            <div class="modal-actions">
+                <button type="button" class="btn btn-outline" id="add-record-cancel">取消</button>
+                <button type="button" class="btn btn-primary" id="add-record-submit">确定新增</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="user-mgmt-modal">
+        <div class="modal-content modal-wide">
+            <h3>用户管理</h3>
+            <table class="user-mgmt-table">
+                <thead>
+                    <tr>
+                        <th>账号</th>
+                        <th>角色</th>
+                        <th>状态</th>
+                        <th>账套权限</th>
+                        <th>可填计划</th>
+                        <th>可填实到</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="user-list-body"></tbody>
+            </table>
+            <div class="user-add-panel">
+                <h4>新增用户</h4>
+                <input type="text" id="user-add-username" placeholder="账号">
+                <input type="password" id="user-add-password" placeholder="密码">
+                <label><input type="checkbox" id="user-add-account-cno" checked> CNO.H</label>
+                <label><input type="checkbox" id="user-add-account-sfo"> SFO.H</label>
+                <label><input type="checkbox" id="user-add-can-plan" checked> 允许填写计划</label>
+                <label><input type="checkbox" id="user-add-can-actual" checked> 允许填写实到</label>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-outline" id="user-mgmt-close">关闭</button>
+                <button type="button" class="btn btn-primary" id="user-add-submit">新增用户</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="change-password-modal">
+        <div class="modal-content">
+            <h3>修改密码</h3>
+            <input type="password" id="change-old-password" placeholder="旧密码">
+            <input type="password" id="change-new-password" placeholder="新密码（至少6位）">
+            <input type="password" id="change-confirm-password" placeholder="确认新密码">
+            <div class="modal-actions">
+                <button type="button" class="btn btn-outline" id="change-password-cancel">取消</button>
+                <button type="button" class="btn btn-primary" id="change-password-submit">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/sql-wasm.js"></script>
+    <script src="db.js"></script>
+    <script src="data.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

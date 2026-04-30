@@ -1,0 +1,22 @@
+# 本地数据库（含业务数据，勿提交；可用 restore_from_data_js.py 从 data.js 重建）
+schedule.sqlite
+schedule.sqlite-wal
+schedule.sqlite-shm
+*.sqlite.bak
+
+# Python
+__pycache__/
+*.py[cod]
+.Python
+venv/
+.venv/
+
+# Excel
+~$*.xlsx
+~$*.xls
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

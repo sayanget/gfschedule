@@ -306,6 +306,11 @@ function isViewingHistory() {
     return Array.isArray(state.historyData);
 }
 
+/** 备注写入数据库前去掉 NUL，避免部分客户端或查看工具异常截断 */
+function sanitizeNoteForDb(raw) {
+    return String(raw ?? '').replace(/\u0000/g, '');
+}
+
 function getRowNote(row) {
     return String(row['备注'] ?? row['单位/备注'] ?? '').trim();
 }
@@ -406,10 +411,21 @@ function findDataRowByUid(uid) {
 
 function syncSaveButtonState() {
     if (!elements.btnSaveRecords) return;
-    elements.btnSaveRecords.disabled = !state.hasUnsavedChanges;
+    const profile = getCurrentUserProfile();
+    if (!profile) {
+        elements.btnSaveRecords.disabled = true;
+        elements.btnSaveRecords.innerHTML = '<i class="ri-save-3-line"></i> 请先登录后保存';
+        return;
+    }
+    if (isViewingHistory()) {
+        elements.btnSaveRecords.disabled = true;
+        elements.btnSaveRecords.innerHTML = '<i class="ri-history-line"></i> 历史模式不可保存';
+        return;
+    }
+    elements.btnSaveRecords.disabled = false;
     elements.btnSaveRecords.innerHTML = state.hasUnsavedChanges
         ? '<i class="ri-check-line"></i> 提交保存'
-        : '<i class="ri-check-double-line"></i> 已保存';
+        : '<i class="ri-save-3-line"></i> 保存到数据库';
 }
 
 function markUnsavedChanges() {
@@ -417,12 +433,82 @@ function markUnsavedChanges() {
     syncSaveButtonState();
 }
 
+function flushPendingNoteInputs() {
+    const inputs = document.querySelectorAll('.note-input[data-row-uid]');
+    inputs.forEach((input) => {
+        const rowUid = String(input.getAttribute('data-row-uid') || '').trim();
+        if (!rowUid) return;
+        const row = findDataRowByUid(rowUid);
+        if (!row) return;
+        row['备注'] = sanitizeNoteForDb(input.value);
+    });
+}
+
+function flushPendingRoleInputs() {
+    const inputs = document.querySelectorAll('.role-edit-input[data-row-uid]');
+    inputs.forEach((input) => {
+        const rowUid = String(input.getAttribute('data-row-uid') || '').trim();
+        if (!rowUid) return;
+        const row = findDataRowByUid(rowUid);
+        if (!row) return;
+        row['岗位/工作内容'] = String(input.value ?? '').replace(/\u0000/g, '').trim();
+    });
+}
+
+function flushPendingShiftInputs() {
+    const inputs = document.querySelectorAll('.shift-edit-input[data-row-uid]');
+    inputs.forEach((input) => {
+        const rowUid = String(input.getAttribute('data-row-uid') || '').trim();
+        if (!rowUid) return;
+        const row = findDataRowByUid(rowUid);
+        if (!row) return;
+        row['班次名称'] = String(input.value || '').trim() || '常规班次';
+    });
+}
+
+function flushPendingPayTypeSelects() {
+    const selects = document.querySelectorAll('.pay-type-select[data-row-uid]');
+    selects.forEach((selectEl) => {
+        const rowUid = String(selectEl.getAttribute('data-row-uid') || '').trim();
+        if (!rowUid) return;
+        const row = findDataRowByUid(rowUid);
+        if (!row) return;
+        row['计薪类型'] = normalizePayType(selectEl.value);
+    });
+}
+
+function flushPendingDayInputs() {
+    const inputs = document.querySelectorAll('.plan-input[data-row-uid][data-day], .actual-input[data-row-uid][data-day]');
+    inputs.forEach((input) => {
+        const rowUid = String(input.getAttribute('data-row-uid') || '').trim();
+        const day = String(input.getAttribute('data-day') || '').trim();
+        const value = parseFloat(input.value) || 0;
+        if (!rowUid || !day) return;
+        const row = findDataRowByUid(rowUid);
+        if (!row) return;
+        if (input.classList.contains('actual-input')) {
+            setRawDayValueFromDisplay(row, day, 'actual', value);
+            return;
+        }
+        setRawDayValueFromDisplay(row, day, 'plan', value);
+    });
+}
+
 async function saveChanges() {
     if (isViewingHistory()) {
         alert('当前为历史查看模式，无法保存。请先点击“回到最新”。');
         return;
     }
+    if (!getCurrentUserProfile()) {
+        alert('请先登录后再保存。');
+        return;
+    }
     try {
+        flushPendingNoteInputs();
+        flushPendingRoleInputs();
+        flushPendingShiftInputs();
+        flushPendingPayTypeSelects();
+        flushPendingDayInputs();
         ensureLaborRowUids(state.data);
         normalizeLaborRowsPayType(state.data);
         await window.scheduleDb.saveLaborDataToDb(state.data, state.currentAccountSet);
@@ -431,7 +517,7 @@ async function saveChanges() {
         await refreshHistoryOptions();
     } catch (err) {
         console.error(err);
-        alert('保存到本地数据库失败：' + (err && err.message ? err.message : String(err)));
+        alert('保存到数据库失败：' + (err && err.message ? err.message : String(err)));
     }
 }
 
@@ -500,7 +586,7 @@ function createEmptyRecordRow(company, shift, role, note) {
         '班次名称': shift.trim() || '常规班次',
         '计薪类型': normalizePayType('计时'),
         '岗位/工作内容': role.trim(),
-        '备注': (note || '').trim(),
+        '备注': sanitizeNoteForDb(note || '').trim(),
         '变化原因': ''
     };
     WEEK_DAYS.forEach(d => {
@@ -789,6 +875,7 @@ function handleLogout() {
     state.currentHistoryId = '';
     checkAuth();
     renderTable();
+    syncSaveButtonState();
 }
 
 function openChangePasswordModal() {
@@ -1250,10 +1337,10 @@ function renderTable() {
             const actual = getDisplayDayValue(row, day, 'actual');
             const statusClass = actual < plan ? 'shortfall' : (actual > plan ? 'overage' : '');
             const planEditor = canEditPlan() && !isCnoSubdivisionRole(row)
-                ? `<input type="number" class="plan-input" value="${plan}" onchange="updatePlan(this, '${rowUid}', '${day}')">`
+                ? `<input type="number" class="plan-input" data-row-uid="${rowUid}" data-day="${day}" value="${plan}" onchange="updatePlan(this, '${rowUid}', '${day}')">`
                 : `<span class="plan-label">${plan}</span>`;
             const actualEditor = canEditActual()
-                ? `<input type="number" class="actual-input ${statusClass}" value="${actual}" onchange="updateActual(this, '${rowUid}', '${day}')">`
+                ? `<input type="number" class="actual-input ${statusClass}" data-row-uid="${rowUid}" data-day="${day}" value="${actual}" onchange="updateActual(this, '${rowUid}', '${day}')">`
                 : `<span class="plan-label">${actual}</span>`;
             return `
                 <td class="col-day" data-day-col="${day}">
@@ -1269,10 +1356,15 @@ function renderTable() {
             `;
         }).join('');
 
+        const rowPlanTotal = days.reduce((sum, day) => sum + getDisplayDayValue(row, day, 'plan'), 0);
+        const shiftCellAlertClass = rowPlanTotal <= 0 ? 'shift-empty-warning' : '';
         const roleText = row['岗位/工作内容'] || '';
         const noteValue = getRowNote(row);
         const groupHint = getGroupHint(noteValue);
         const changeReason = getChangeReason(row);
+        const roleCellContent = editableRow && isCurrentUserAdmin()
+            ? `<input type="text" class="role-edit-input" data-row-uid="${rowUid}" value="${escapeHtml(roleText)}" onchange="updateJobContent(this, '${rowUid}')">`
+            : `<div class="role-info">${escapeHtml(roleText)}</div>`;
         const shiftCellContent = editableRow && isCurrentUserAdmin()
             ? `
                 <div class="shift-badge ${shiftMeta.cls}">
@@ -1280,7 +1372,7 @@ function renderTable() {
                     <span class="shift-name">${escapeHtml(shiftMeta.text)}</span>
                 </div>
                 <div class="shift-admin-tools">
-                    <input type="text" class="shift-edit-input" value="${escapeHtml(shift)}" onchange="updateShiftName(this, '${rowUid}')">
+                    <input type="text" class="shift-edit-input" data-row-uid="${rowUid}" value="${escapeHtml(shift)}" onchange="updateShiftName(this, '${rowUid}')">
                     <button type="button" class="shift-delete-btn" title="删除班次记录" aria-label="删除班次记录" onclick="deleteScheduleRow('${rowUid}')"><i class="ri-delete-bin-line"></i></button>
                 </div>
             `
@@ -1294,25 +1386,25 @@ function renderTable() {
         html += `
             <tr class="data-row">
                 <td><span class="company-tag ${companyColorClass}">${escapeHtml(company)}</span></td>
-                <td>
+                <td class="${shiftCellAlertClass}">
                     ${shiftCellContent}
                 </td>
                 <td>
                     ${editableRow
-                        ? `<select class="pay-type-select ${payTypeClass}" onchange="updatePayType(this, '${rowUid}')">
+                        ? `<select class="pay-type-select ${payTypeClass}" data-row-uid="${rowUid}" onchange="updatePayType(this, '${rowUid}')">
                             <option value="计时" ${payType === '计时' ? 'selected' : ''}>计时</option>
                             <option value="计件" ${payType === '计件' ? 'selected' : ''}>计件</option>
                         </select>`
                         : `<span class="pay-type-badge ${payTypeClass}">${payType}</span>`
                     }
                 </td>
-                <td><div class="role-info">${escapeHtml(roleText)}</div></td>
+                <td class="role-cell">${roleCellContent}</td>
                 ${cells}
-                <td>
+                <td class="note-cell">
                     <div class="note-wrap">
                         ${editableRow
-                            ? `<input type="text" class="note-input" value="${escapeHtml(noteValue)}" onchange="updateNote(this, '${rowUid}')">`
-                            : `<span class="plan-label">${escapeHtml(noteValue) || '-'}</span>`
+                            ? `<textarea class="note-input" data-row-uid="${rowUid}" rows="2" wrap="soft" spellcheck="false" onchange="updateNote(this, '${rowUid}')">${escapeHtml(noteValue)}</textarea>`
+                            : `<span class="plan-label note-readonly">${escapeHtml(noteValue) || '-'}</span>`
                         }
                         ${groupHint ? `<span class="note-group-hint">${escapeHtml(groupHint)}</span>` : ''}
                     </div>
@@ -1376,6 +1468,7 @@ function renderTable() {
     
     applyFilters();
     recalcTotal();
+    syncSaveButtonState();
 }
 
 function applyFilters() {
@@ -1491,7 +1584,7 @@ function updateNote(input, rowUid) {
     if (isViewingHistory()) return;
     const row = findDataRowByUid(rowUid);
     if (!row) return;
-    row['备注'] = input.value;
+    row['备注'] = sanitizeNoteForDb(input.value);
     markUnsavedChanges();
     renderTable();
 }
@@ -1516,6 +1609,20 @@ function updateShiftName(input, rowUid) {
     if (!row) return;
     const value = String(input.value || '').trim() || '常规班次';
     row['班次名称'] = value;
+    markUnsavedChanges();
+    populateCompanyFilter();
+    renderTable();
+}
+
+function updateJobContent(input, rowUid) {
+    if (isViewingHistory()) return;
+    if (!isCurrentUserAdmin()) {
+        renderTable();
+        return;
+    }
+    const row = findDataRowByUid(rowUid);
+    if (!row) return;
+    row['岗位/工作内容'] = String(input.value ?? '').replace(/\u0000/g, '').trim();
     markUnsavedChanges();
     populateCompanyFilter();
     renderTable();

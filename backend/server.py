@@ -137,6 +137,11 @@ def _row_uid_sql(row: sqlite3.Row) -> str:
         return ""
 
 
+def _strip_nul(text: object) -> str:
+    """避免 SQLite TEXT 含 NUL 时个别绑定层或查看工具显示异常。"""
+    return str(text or "").replace("\x00", "")
+
+
 def _record_to_tuple(row: dict, account_set: str) -> tuple:
     pay_type = _normalize_pay_type(row.get("计薪类型", "计时"))
     return (
@@ -145,9 +150,9 @@ def _record_to_tuple(row: dict, account_set: str) -> tuple:
         str(row.get("劳务公司/归属", "") or "").strip(),
         str(row.get("班次名称", "常规班次") or "常规班次").strip(),
         pay_type,
-        str(row.get("岗位/工作内容", "") or "").strip(),
-        str(row.get("备注", row.get("单位/备注", "")) or "").strip(),
-        str(row.get("变化原因", "") or "").strip(),
+        _strip_nul(row.get("岗位/工作内容", "")).strip(),
+        _strip_nul(row.get("备注", row.get("单位/备注", ""))).strip(),
+        _strip_nul(row.get("变化原因", "")).strip(),
         _to_float(row.get("星期一")),
         _to_float(row.get("星期一_实到")),
         _to_float(row.get("星期二")),
@@ -283,6 +288,42 @@ def write_labor(data: list, account_set: str = DEFAULT_ACCOUNT_SET) -> None:
             (account_set, snapshot_json),
         )
         conn.commit()
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error:
+            pass
+    finally:
+        conn.close()
+
+
+def replace_schedule_database_bytes(blob: bytes) -> None:
+    """将完整 SQLite 文件写入 DB_PATH（浏览器 sql.js 导出同步 / 导入共用）。"""
+    if len(blob) < 100:
+        raise ValueError("文件过小或无效")
+    if not blob.startswith(b"SQLite format 3\x00"):
+        raise ValueError("不是有效的 SQLite 数据库文件")
+    PROJECT_ROOT.mkdir(parents=True, exist_ok=True)
+    bak = DB_PATH.with_suffix(".sqlite.bak")
+    tmp = DB_PATH.with_name(DB_PATH.name + ".tmp")
+    if DB_PATH.exists():
+        shutil.copy2(DB_PATH, bak)
+    try:
+        tmp.write_bytes(blob)
+        os.replace(tmp, DB_PATH)
+    except Exception:
+        if tmp.is_file():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        raise
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("SELECT 1 FROM sqlite_master LIMIT 1")
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error:
+            pass
     finally:
         conn.close()
 
@@ -588,10 +629,6 @@ class ScheduleHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
 
-        if path != "/api/database-import":
-            self.send_error(404)
-            return
-
         length = int(self.headers.get("Content-Length", 0))
         blob = self.rfile.read(length)
         if len(blob) < 100:
@@ -599,12 +636,38 @@ class ScheduleHandler(SimpleHTTPRequestHandler):
             return
 
         bak = DB_PATH.with_suffix(".sqlite.bak")
+
+        if path == "/api/database-sync":
+            try:
+                replace_schedule_database_bytes(blob)
+            except ValueError as e:
+                self._send_json_error(400, str(e))
+                return
+            except Exception as e:
+                if bak.exists():
+                    try:
+                        shutil.copy2(bak, DB_PATH)
+                    except OSError:
+                        pass
+                elif DB_PATH.exists():
+                    try:
+                        DB_PATH.unlink()
+                    except OSError:
+                        pass
+                self._send_json_error(500, "写入数据库失败: " + str(e))
+                return
+            self.send_response(204)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
+
+        if path != "/api/database-import":
+            self.send_error(404)
+            return
+
         PROJECT_ROOT.mkdir(parents=True, exist_ok=True)
         try:
-            if DB_PATH.exists():
-                shutil.copy2(DB_PATH, bak)
-            DB_PATH.write_bytes(blob)
-            sqlite3.connect(DB_PATH).close()
+            replace_schedule_database_bytes(blob)
             rows = read_labor()
             if not isinstance(rows, list):
                 rows = []

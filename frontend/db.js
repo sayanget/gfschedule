@@ -117,7 +117,12 @@
                         backendMode = false;
                         serverStorageInfo = null;
                         setForceLocalMode(true);
-                        await saveLaborDataSqlJs(arr, set);
+                        const diskOk = await saveLaborDataSqlJs(arr, set);
+                        if (!diskOk) {
+                            console.warn(
+                                '[scheduleDb] 已写入浏览器 IndexedDB，但磁盘 schedule.sqlite 未同步（请启动后端）'
+                            );
+                        }
                         return;
                     }
                     throw new Error('保存失败 HTTP ' + r.status);
@@ -128,11 +133,21 @@
                 backendMode = false;
                 serverStorageInfo = null;
                 setForceLocalMode(true);
-                await saveLaborDataSqlJs(arr, set);
+                const diskOk = await saveLaborDataSqlJs(arr, set);
+                if (!diskOk) {
+                    console.warn(
+                        '[scheduleDb] 已写入浏览器 IndexedDB，但磁盘 schedule.sqlite 未同步（请启动后端）'
+                    );
+                }
                 return;
             }
         }
-        await saveLaborDataSqlJs(arr, set);
+        const diskOk = await saveLaborDataSqlJs(arr, set);
+        if (!diskOk) {
+            console.warn(
+                '[scheduleDb] 已写入浏览器 IndexedDB，但磁盘 schedule.sqlite 未同步（请启动后端）'
+            );
+        }
     }
 
     async function importSqliteFile(file) {
@@ -357,8 +372,8 @@
             String(row['劳务公司/归属'] || '').trim(),
             String(row['班次名称'] || '常规班次').trim() || '常规班次',
             payType,
-            String(row['岗位/工作内容'] || '').trim(),
-            String((row['备注'] ?? row['单位/备注'] ?? '') || '').trim(),
+            String(row['岗位/工作内容'] || '').replace(/\u0000/g, '').trim(),
+            String((row['备注'] ?? row['单位/备注'] ?? '') || '').replace(/\u0000/g, '').trim(),
             String(row['变化原因'] || '').trim(),
             toNum(row['星期一']),
             toNum(row['星期一_实到']),
@@ -435,6 +450,42 @@
         await idbPut(SQLITE_KEY, exported);
     }
 
+    /**
+     * sql.js 保存后把当前库同步到后端磁盘 schedule.sqlite。
+     * @returns {Promise<boolean>} 无需同步或非 HTTP 页视为成功 true；已尝试同步且失败为 false
+     */
+    async function syncSqliteFileToServer() {
+        if (!isHttpPage()) return true;
+        if (!sqlDbInstance) return true;
+        let exported;
+        try {
+            exported = sqlDbInstance.export();
+        } catch (e) {
+            console.warn('[scheduleDb] SQLite export 失败', e);
+            return false;
+        }
+        const body = exported instanceof Uint8Array ? exported : new Uint8Array(exported);
+        if (body.byteLength < 100) return false;
+        try {
+            const r = await fetch('/api/database-sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/octet-stream' },
+                body: body
+            });
+            if (!r.ok) {
+                console.warn('[scheduleDb] 未能同步到磁盘 schedule.sqlite，HTTP', r.status);
+                return false;
+            }
+            return true;
+        } catch (e) {
+            console.warn(
+                '[scheduleDb] 未能同步到磁盘 schedule.sqlite（请确认本机已启动 python backend/server.py）',
+                e
+            );
+            return false;
+        }
+    }
+
     async function loadScheduleDataSqlJs(accountSet = 'CNO.H') {
         const set = normalizeAccountSet(accountSet);
         const SQL = await ensureSqlModule();
@@ -482,6 +533,7 @@
             sqlDbInstance.run(`INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)`, ['laborData', json]);
         }
         await persistSqliteToIdb();
+        return await syncSqliteFileToServer();
     }
 
     async function importSqliteFileSqlJs(file) {
@@ -496,6 +548,7 @@
         const set = 'CNO.H';
         migrateKvToTableIfNeeded(set);
         await persistSqliteToIdb();
+        await syncSqliteFileToServer();
         const rows = readLaborFromTable(set);
         if (Array.isArray(rows) && rows.length) return rows;
         const legacyRows = readLaborFromKv();

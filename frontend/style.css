@@ -430,6 +430,14 @@ body {
     background: #f8fbff;
 }
 
+.data-row td.shift-empty-warning {
+    background: #ffe4e6;
+}
+
+.data-row:hover td.shift-empty-warning {
+    background: #fecdd3;
+}
+
 .subtotal-row td {
     background: #1e3a8a !important;
     border-bottom: 1px solid #1e40af;
@@ -646,10 +654,38 @@ body {
     border-color: #334155;
 }
 
+.role-cell {
+    min-width: 140px;
+    max-width: 280px;
+    vertical-align: middle;
+}
+
 .role-info {
     font-weight: 600;
     color: #0f172a;
     line-height: 1.2;
+    word-break: break-word;
+}
+
+.role-edit-input {
+    width: 100%;
+    min-width: 120px;
+    max-width: 100%;
+    box-sizing: border-box;
+    height: 28px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 0 8px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #0f172a;
+    background: #fff;
+}
+
+.role-edit-input:focus {
+    outline: none;
+    border-color: #93c5fd;
+    box-shadow: 0 0 0 2px rgba(147, 197, 253, 0.35);
 }
 
 .pay-type-select {
@@ -796,20 +832,39 @@ body {
     justify-content: center;
 }
 
+.note-cell {
+    min-width: 200px;
+    max-width: 380px;
+    vertical-align: top;
+}
+
 .note-input {
     width: 100%;
-    min-width: 120px;
+    min-width: 140px;
+    max-width: 100%;
+    min-height: 40px;
+    resize: vertical;
     border: 1px dashed transparent;
     border-radius: 8px;
-    padding: 2px 4px;
+    padding: 4px 6px;
     font-size: 11px;
+    font-family: inherit;
+    line-height: 1.35;
     color: #64748b;
     background: transparent;
 }
 
+.note-readonly {
+    display: inline-block;
+    max-width: 100%;
+    white-space: pre-wrap;
+    word-break: break-word;
+    text-align: left;
+}
+
 .note-wrap {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 6px;
 }
 
@@ -951,6 +1006,17 @@ body {
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 0 10px;
+}
+
+.modal-content textarea {
+    width: 100%;
+    min-height: 72px;
+    margin-bottom: 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    font-family: inherit;
+    resize: vertical;
 }
 
 .modal-content select {

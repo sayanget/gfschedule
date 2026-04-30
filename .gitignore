@@ -1,4 +1,5 @@
-# SQLite 运行时附属文件（不纳入版本库；主库 schedule.sqlite 已跟踪）
+# SQLite 文件（不纳入版本库）
+schedule.sqlite
 schedule.sqlite-wal
 schedule.sqlite-shm
 *.sqlite.bak

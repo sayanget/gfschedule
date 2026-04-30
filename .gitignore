@@ -1,5 +1,4 @@
-# 本地数据库（含业务数据，勿提交；可用 restore_from_data_js.py 从 data.js 重建）
-schedule.sqlite
+# SQLite 运行时附属文件（不纳入版本库；主库 schedule.sqlite 已跟踪）
 schedule.sqlite-wal
 schedule.sqlite-shm
 *.sqlite.bak

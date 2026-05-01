@@ -14,7 +14,17 @@ import sys
 import unicodedata
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
+
+
+def normalized_http_path(raw_path: str) -> str:
+    """解码 %xx、去掉两端空白并折叠多余斜杠，避免 //api/... 与路由不一致而落到静态目录 404。"""
+    p = unquote(raw_path or "/").strip()
+    if not p.startswith("/"):
+        p = "/" + p
+    segs = [s for s in p.split("/") if s]
+    return "/" + "/".join(segs) if segs else "/"
+
 
 ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = ROOT.parent
@@ -127,7 +137,10 @@ def _to_float(v) -> float:
 
 def _normalize_pay_type(v: object) -> str:
     s = unicodedata.normalize("NFKC", str(v if v is not None else "计时")).strip()
-    return "计件" if s == "计件" else "计时"
+    sl = s.lower()
+    if s in ("计件", "計件") or sl in ("piece", "piecework"):
+        return "计件"
+    return "计时"
 
 
 def _row_uid_sql(row: sqlite3.Row) -> str:
@@ -413,6 +426,49 @@ def _count_labor_rows(db_file: Path) -> int:
         return -2
 
 
+SCHEDULE_USERS_K = "scheduleUsers"
+
+
+def read_schedule_users_json() -> str:
+    """返回登录用户列表 JSON；无记录时用 []，与各设备对齐同一账号库（不依赖每台手机 localStorage）。"""
+    if not DB_PATH.exists():
+        return "[]"
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        ensure_schema(conn)
+        row = conn.execute(
+            "SELECT v FROM kv WHERE k = ?", (SCHEDULE_USERS_K,)
+        ).fetchone()
+        if not row or not row[0]:
+            return "[]"
+        data = json.loads(row[0])
+        if isinstance(data, list):
+            return json.dumps(data, ensure_ascii=False)
+    except (sqlite3.Error, json.JSONDecodeError, TypeError, ValueError):
+        pass
+    finally:
+        conn.close()
+    return "[]"
+
+
+def write_schedule_users_from_json(blob: str) -> None:
+    try:
+        data = json.loads(blob)
+    except json.JSONDecodeError as e:
+        raise ValueError("JSON 无效") from e
+    if not isinstance(data, list):
+        raise ValueError("JSON 应为数组")
+    conn = db_conn()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)",
+            (SCHEDULE_USERS_K, json.dumps(data, ensure_ascii=False)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def migrate_legacy_database_if_needed() -> None:
     """backend/data/schedule.sqlite → 项目根目录 schedule.sqlite。
 
@@ -506,6 +562,64 @@ class ScheduleHandler(SimpleHTTPRequestHandler):
     def log_message(self, fmt, *args_):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args_))
 
+    def _write_json_response(self, code: int, raw: bytes, *, send_body: bool) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        if send_body:
+            self.wfile.write(raw)
+
+    def _try_api_get(
+        self, path: str, query: dict, account_set: str, *, send_body: bool
+    ) -> bool:
+        """处理 /api/server-info、/api/labor、/api/labor-history 的 GET/HEAD；成功则返回 True。"""
+        if path == "/api/server-info":
+            db_abs = str(DB_PATH.resolve())
+            root_abs = str(ROOT.parent.resolve())
+            try:
+                rel = os.path.relpath(db_abs, root_abs).replace("\\", "/")
+            except ValueError:
+                rel = "schedule.sqlite"
+            payload = {
+                "databasePath": db_abs,
+                "relativeToProject": rel,
+                "scheduleServerPy": str(Path(__file__).resolve()),
+            }
+            raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            self._write_json_response(200, raw, send_body=send_body)
+            return True
+
+        if path == "/api/schedule-users":
+            raw = read_schedule_users_json().encode("utf-8")
+            self._write_json_response(200, raw, send_body=send_body)
+            return True
+
+        if path == "/api/labor":
+            rows = read_labor(account_set)
+            raw = json.dumps(rows, ensure_ascii=False).encode("utf-8")
+            self._write_json_response(200, raw, send_body=send_body)
+            return True
+
+        if path == "/api/labor-history":
+            if "id" in query:
+                try:
+                    history_id = int(query["id"][0])
+                except ValueError:
+                    self._send_json_error(400, "id 参数无效")
+                    return True
+                rows = read_labor_history_by_id(history_id, account_set)
+                raw = json.dumps(rows, ensure_ascii=False).encode("utf-8")
+                self._write_json_response(200, raw, send_body=send_body)
+                return True
+            history = read_labor_history_list(account_set)
+            raw = json.dumps(history, ensure_ascii=False).encode("utf-8")
+            self._write_json_response(200, raw, send_body=send_body)
+            return True
+
+        return False
+
     def _send_json_error(self, code: int, message: str) -> None:
         """API 路由返回 JSON，避免浏览器显示 HTML 错误页难以辨认。"""
         body = json.dumps(
@@ -517,71 +631,18 @@ class ScheduleHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     def do_GET(self):
         parsed = urlparse(self.path)
-        path = parsed.path.rstrip("/") or "/"
+        path = normalized_http_path(parsed.path)
         query = parse_qs(parsed.query or "")
         account_set = normalize_account_set(
             (query.get("account_set") or [DEFAULT_ACCOUNT_SET])[0]
         )
 
-        if path == "/api/server-info":
-            db_abs = str(DB_PATH.resolve())
-            root_abs = str(ROOT.parent.resolve())
-            try:
-                rel = os.path.relpath(db_abs, root_abs).replace("\\", "/")
-            except ValueError:
-                rel = "schedule.sqlite"
-            payload = {
-                "databasePath": db_abs,
-                "relativeToProject": rel,
-            }
-            raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(raw)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(raw)
-            return
-
-        if path == "/api/labor":
-            rows = read_labor(account_set)
-            raw = json.dumps(rows, ensure_ascii=False).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(raw)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(raw)
-            return
-
-        if path == "/api/labor-history":
-            if "id" in query:
-                try:
-                    history_id = int(query["id"][0])
-                except ValueError:
-                    self._send_json_error(400, "id 参数无效")
-                    return
-                rows = read_labor_history_by_id(history_id, account_set)
-                raw = json.dumps(rows, ensure_ascii=False).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(len(raw)))
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                self.wfile.write(raw)
-                return
-            history = read_labor_history_list(account_set)
-            raw = json.dumps(history, ensure_ascii=False).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(raw)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(raw)
+        if self._try_api_get(path, query, account_set, send_body=True):
             return
 
         # 浏览器默认请求 /favicon.ico；提供与 favicon.svg 相同内容，避免控制台 404
@@ -599,13 +660,49 @@ class ScheduleHandler(SimpleHTTPRequestHandler):
 
         return SimpleHTTPRequestHandler.do_GET(self)
 
-    def do_PUT(self):
+    def do_HEAD(self):
         parsed = urlparse(self.path)
-        path = parsed.path.rstrip("/") or "/"
+        path = normalized_http_path(parsed.path)
         query = parse_qs(parsed.query or "")
         account_set = normalize_account_set(
             (query.get("account_set") or [DEFAULT_ACCOUNT_SET])[0]
         )
+
+        if self._try_api_get(path, query, account_set, send_body=False):
+            return
+
+        if path == "/favicon.ico":
+            svg = FRONTEND / "favicon.svg"
+            if svg.is_file():
+                data = svg.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/svg+xml")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "public, max-age=86400")
+                self.end_headers()
+                return
+
+        return SimpleHTTPRequestHandler.do_HEAD(self)
+
+    def do_PUT(self):
+        parsed = urlparse(self.path)
+        path = normalized_http_path(parsed.path)
+        query = parse_qs(parsed.query or "")
+        account_set = normalize_account_set(
+            (query.get("account_set") or [DEFAULT_ACCOUNT_SET])[0]
+        )
+
+        if path == "/api/schedule-users":
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length).decode("utf-8")
+            try:
+                write_schedule_users_from_json(body)
+            except ValueError as e:
+                self._send_json_error(400, str(e))
+                return
+            self.send_response(204)
+            self.end_headers()
+            return
 
         if path != "/api/labor":
             self.send_error(404)
@@ -627,7 +724,7 @@ class ScheduleHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        path = parsed.path.rstrip("/") or "/"
+        path = normalized_http_path(parsed.path)
 
         length = int(self.headers.get("Content-Length", 0))
         blob = self.rfile.read(length)

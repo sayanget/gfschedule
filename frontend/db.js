@@ -35,11 +35,6 @@
         }
     }
 
-    function hasPayTypeField(rows) {
-        if (!Array.isArray(rows) || rows.length === 0) return true;
-        return rows.some((r) => r && typeof r === 'object' && Object.prototype.hasOwnProperty.call(r, '计薪类型'));
-    }
-
     async function tryBackendLoad(accountSet) {
         const set = normalizeAccountSet(accountSet);
         const r = await fetch(`/api/labor?account_set=${encodeURIComponent(set)}`, { cache: 'no-store' });
@@ -59,28 +54,40 @@
         }
     }
 
+    /** 逐行补全缺省字段（原先「只要有一行带键就跳过」会导致其它行仍缺 计薪类型） */
+    function ensurePayTypeOnRows(rows) {
+        const list = Array.isArray(rows) ? rows : [];
+        let patched = false;
+        const out = list.map((r) => {
+            if (!r || typeof r !== 'object') return r;
+            if (!Object.prototype.hasOwnProperty.call(r, '计薪类型')) {
+                patched = true;
+                return { ...r, 计薪类型: '计时' };
+            }
+            return r;
+        });
+        if (patched) {
+            if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+                console.debug(
+                    '[scheduleDb] 已从服务器载入的行中补足缺省的 计薪类型 → 计时（旧数据或未写该字段时常见）。'
+                );
+            }
+        }
+        return out;
+    }
+
     async function loadScheduleData(accountSet = 'CNO.H') {
         const set = normalizeAccountSet(accountSet);
-        if (isForceLocalMode()) {
-            backendMode = false;
-            return await loadScheduleDataSqlJs(set);
-        }
+
+        /** http(s) 访问：只允许服务端 schedule.sqlite，不写浏览器 IndexedDB */
         if (isHttpPage()) {
+            setForceLocalMode(false);
             try {
                 const rows = await tryBackendLoad(set);
-                if (!hasPayTypeField(rows)) {
-                    console.warn('[scheduleDb] 后端返回不包含「计薪类型」字段，切换到本地 SQLite 模式保存。');
-                    backendMode = false;
-                    serverStorageInfo = null;
-                    setForceLocalMode(true);
-                    // 把当前后端数据落一份到本地，避免刷新后丢失
-                    await saveLaborDataSqlJs(Array.isArray(rows) ? rows : [], set);
-                    return await loadScheduleDataSqlJs(set);
-                }
+                const normalized = ensurePayTypeOnRows(rows);
                 backendMode = true;
-                setForceLocalMode(false);
                 await fetchServerStorageInfo();
-                if (Array.isArray(rows) && rows.length > 0) return rows;
+                if (normalized.length > 0) return normalized;
                 if (
                     typeof initialData !== 'undefined' &&
                     Array.isArray(initialData)
@@ -89,19 +96,76 @@
                 }
                 return [];
             } catch (e) {
-                console.warn(
-                    '[scheduleDb] 无法连接后端 API，改用浏览器内 SQLite（sql.js）',
-                    e
-                );
+                console.error('[scheduleDb] HTTP page requires backend API', e);
                 backendMode = false;
                 serverStorageInfo = null;
+                throw new Error(
+                    '无法连接排班后端（请在本机运行 python backend/server.py，并用 http://服务器IP:8787/ 打开页面）。'
+                );
             }
+        }
+
+        if (isForceLocalMode()) {
+            backendMode = false;
+            return await loadScheduleDataSqlJs(set);
+        }
+
+        try {
+            const rows = await tryBackendLoad(set);
+            const normalized = ensurePayTypeOnRows(rows);
+            backendMode = true;
+            setForceLocalMode(false);
+            await fetchServerStorageInfo();
+            if (normalized.length > 0) return normalized;
+            if (
+                typeof initialData !== 'undefined' &&
+                Array.isArray(initialData)
+            ) {
+                return initialData;
+            }
+            return [];
+        } catch (e) {
+            console.warn(
+                '[scheduleDb] Backend unreachable (file/offline mode); using in-browser SQLite.',
+                e
+            );
+            backendMode = false;
+            serverStorageInfo = null;
         }
         return await loadScheduleDataSqlJs(set);
     }
 
     async function saveLaborDataToDb(arr, accountSet = 'CNO.H') {
         const set = normalizeAccountSet(accountSet);
+
+        if (isHttpPage()) {
+            try {
+                const r = await fetch(`/api/labor?account_set=${encodeURIComponent(set)}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json; charset=utf-8'
+                    },
+                    body: JSON.stringify(arr)
+                });
+                if (!r.ok) {
+                    throw new Error(
+                        (r.status === 404 || r.status === 405
+                            ? '保存失败：服务器无法写入（请使用本项目 backend/server.py）。 '
+                            : '保存失败 ') + 'HTTP ' + r.status
+                    );
+                }
+                backendMode = true;
+            } catch (e) {
+                if (e instanceof TypeError) {
+                    throw new Error(
+                        '保存失败：无法连接服务器（请确认本机已启动 python backend/server.py，并用 http://地址:8787 访问）。'
+                    );
+                }
+                throw e;
+            }
+            return;
+        }
+
         if (backendMode) {
             try {
                 const r = await fetch(`/api/labor?account_set=${encodeURIComponent(set)}`, {
@@ -112,7 +176,6 @@
                     body: JSON.stringify(arr)
                 });
                 if (!r.ok) {
-                    // 常见于旧服务（无 API 路由）或代理未放行 PUT：自动退回本地保存
                     if (r.status === 404 || r.status === 405 || r.status >= 500) {
                         backendMode = false;
                         serverStorageInfo = null;
@@ -120,7 +183,7 @@
                         const diskOk = await saveLaborDataSqlJs(arr, set);
                         if (!diskOk) {
                             console.warn(
-                                '[scheduleDb] 已写入浏览器 IndexedDB，但磁盘 schedule.sqlite 未同步（请启动后端）'
+                                '[scheduleDb] Saved to IndexedDB only; schedule.sqlite sync failed (start backend).'
                             );
                         }
                         return;
@@ -129,14 +192,13 @@
                 }
                 return;
             } catch (e) {
-                // 网络层失败也回退本地模式
                 backendMode = false;
                 serverStorageInfo = null;
                 setForceLocalMode(true);
                 const diskOk = await saveLaborDataSqlJs(arr, set);
                 if (!diskOk) {
                     console.warn(
-                        '[scheduleDb] 已写入浏览器 IndexedDB，但磁盘 schedule.sqlite 未同步（请启动后端）'
+                        '[scheduleDb] Saved to IndexedDB only; schedule.sqlite sync failed (start backend).'
                     );
                 }
                 return;
@@ -145,13 +207,13 @@
         const diskOk = await saveLaborDataSqlJs(arr, set);
         if (!diskOk) {
             console.warn(
-                '[scheduleDb] 已写入浏览器 IndexedDB，但磁盘 schedule.sqlite 未同步（请启动后端）'
+                '[scheduleDb] Saved to IndexedDB only; schedule.sqlite sync failed (start backend).'
             );
         }
     }
 
     async function importSqliteFile(file) {
-        if (backendMode) {
+        if (isHttpPage() || backendMode) {
             const buf = await file.arrayBuffer();
             const r = await fetch('/api/database-import', {
                 method: 'POST',
@@ -173,33 +235,40 @@
     async function loadLaborHistoryList(accountSet = 'CNO.H') {
         const set = normalizeAccountSet(accountSet);
         if (!backendMode || !historyApiSupported) return [];
-        const r = await fetch(`/api/labor-history?account_set=${encodeURIComponent(set)}`, { cache: 'no-store' });
-        if (!r.ok) {
-            if (r.status === 404) {
+        try {
+            const r = await fetch(`/api/labor-history?account_set=${encodeURIComponent(set)}`, {
+                cache: 'no-store'
+            });
+            if (!r.ok) {
                 historyApiSupported = false;
                 return [];
             }
-            throw new Error('历史查询失败 HTTP ' + r.status);
+            const rows = await r.json();
+            return Array.isArray(rows) ? rows : [];
+        } catch {
+            historyApiSupported = false;
+            return [];
         }
-        const rows = await r.json();
-        return Array.isArray(rows) ? rows : [];
     }
 
     async function loadLaborHistoryById(id, accountSet = 'CNO.H') {
         const set = normalizeAccountSet(accountSet);
         if (!backendMode || !historyApiSupported) return [];
-        const r = await fetch(`/api/labor-history?id=${encodeURIComponent(String(id))}&account_set=${encodeURIComponent(set)}`, {
-            cache: 'no-store'
-        });
-        if (!r.ok) {
-            if (r.status === 404) {
+        try {
+            const r = await fetch(
+                `/api/labor-history?id=${encodeURIComponent(String(id))}&account_set=${encodeURIComponent(set)}`,
+                { cache: 'no-store' }
+            );
+            if (!r.ok) {
                 historyApiSupported = false;
                 return [];
             }
-            throw new Error('历史详情查询失败 HTTP ' + r.status);
+            const rows = await r.json();
+            return Array.isArray(rows) ? rows : [];
+        } catch {
+            historyApiSupported = false;
+            return [];
         }
-        const rows = await r.json();
-        return Array.isArray(rows) ? rows : [];
     }
 
     /* ---------- 以下为浏览器内 sql.js + IndexedDB（直连 HTML / CDN 失败时） ---------- */
@@ -250,14 +319,44 @@
         );
     }
 
+    function loadSqlJsScriptOnce() {
+        return new Promise((resolve, reject) => {
+            if (typeof initSqlJs !== 'undefined') {
+                resolve();
+                return;
+            }
+            const existed = document.querySelector('script[data-schedule-sqljs="1"]');
+            if (existed) {
+                existed.addEventListener('load', () => resolve());
+                existed.addEventListener('error', () => reject(new Error('sql.js script failed')));
+                return;
+            }
+            const s = document.createElement('script');
+            s.src = 'https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/sql-wasm.js';
+            s.async = true;
+            s.crossOrigin = 'anonymous';
+            s.dataset.scheduleSqljs = '1';
+            s.onload = () => resolve();
+            s.onerror = () => reject(new Error('Failed to load sql.js (offline/file mode only)'));
+            document.head.appendChild(s);
+        });
+    }
+
     function ensureSqlModule() {
-        if (typeof initSqlJs === 'undefined') {
-            return Promise.reject(new Error('sql.js 未加载'));
+        if (isHttpPage()) {
+            return Promise.reject(
+                new Error('Browser SQLite is disabled on http(s); use backend schedule.sqlite only.')
+            );
         }
         if (!sqlModulePromise) {
-            sqlModulePromise = initSqlJs({
-                locateFile: (file) =>
-                    `https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/${file}`
+            sqlModulePromise = loadSqlJsScriptOnce().then(() => {
+                if (typeof initSqlJs === 'undefined') {
+                    throw new Error('sql.js failed to initialize');
+                }
+                return initSqlJs({
+                    locateFile: (file) =>
+                        `https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/${file}`
+                });
             });
         }
         return sqlModulePromise;
@@ -333,7 +432,9 @@
     function normalizePayTypeField(raw) {
         let s = String(raw ?? '').trim().replace(/\u3000/g, '');
         if (typeof s.normalize === 'function') s = s.normalize('NFKC');
-        return s === '计件' ? '计件' : '计时';
+        const lower = s.toLowerCase();
+        if (s === '计件' || s === '計件' || lower === 'piece' || lower === 'piecework') return '计件';
+        return '计时';
     }
 
     function rowToRecord(row) {

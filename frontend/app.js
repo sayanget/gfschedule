@@ -1,4 +1,9 @@
 // Classic App Logic - Reverted & Fixed
+function isHttpBackendPage() {
+    return typeof window !== 'undefined' &&
+        (window.location.protocol === 'http:' || window.location.protocol === 'https:');
+}
+
 function safeLoadData() {
     const fallback = (typeof initialData !== 'undefined' ? initialData : []);
     try {
@@ -22,7 +27,13 @@ const state = {
     shiftQuery: '',
     shiftQueries: [],
     searchQuery: '',
-    currentUser: localStorage.getItem('currentUser') || '',
+    currentUser: (() => {
+        try {
+            return localStorage.getItem('currentUser') || '';
+        } catch {
+            return '';
+        }
+    })(),
     users: [],
     hasUnsavedChanges: false
 };
@@ -84,6 +95,9 @@ const elements = {
     addRecordSubmit: document.getElementById('add-record-submit'),
     addRecordCancel: document.getElementById('add-record-cancel'),
     storageLocationHint: document.getElementById('storage-location-hint'),
+    scheduleTableScroll: document.getElementById('schedule-table-scroll'),
+    scheduleHscrollRail: document.getElementById('schedule-hscroll-rail'),
+    scheduleHscrollSpacer: document.getElementById('schedule-hscroll-spacer'),
     userMgmtModal: document.getElementById('user-mgmt-modal'),
     userListBody: document.getElementById('user-list-body'),
     userAddUsername: document.getElementById('user-add-username'),
@@ -99,8 +113,95 @@ const elements = {
     changeNewPassword: document.getElementById('change-new-password'),
     changeConfirmPassword: document.getElementById('change-confirm-password'),
     changePasswordCancel: document.getElementById('change-password-cancel'),
-    changePasswordSubmit: document.getElementById('change-password-submit')
+    changePasswordSubmit: document.getElementById('change-password-submit'),
+    changeReasonModal: document.getElementById('change-reason-modal'),
+    changeReasonModalBody: document.getElementById('change-reason-modal-body'),
+    changeReasonModalClose: document.getElementById('change-reason-modal-close')
 };
+
+let _scheduleHscrollMirroring = false;
+let _scheduleHscrollBindDone = false;
+
+function syncScheduleHscrollRailDock() {
+    const pane = elements.scheduleTableScroll;
+    const rail = elements.scheduleHscrollRail;
+    if (!pane || !rail) return;
+    const r = pane.getBoundingClientRect();
+    const left = Math.max(0, r.left);
+    const w = Math.max(0, r.width);
+    rail.style.left = `${left}px`;
+    rail.style.width = `${w}px`;
+}
+
+function bindScheduleHorizontalScrollOnce() {
+    if (_scheduleHscrollBindDone) return;
+    const pane = elements.scheduleTableScroll;
+    const rail = elements.scheduleHscrollRail;
+    const spacer = elements.scheduleHscrollSpacer;
+    const table = elements.scheduleTable;
+    if (!pane || !rail || !spacer || !table) return;
+    _scheduleHscrollBindDone = true;
+
+    const mirrorPaneToRail = () => {
+        if (_scheduleHscrollMirroring) return;
+        _scheduleHscrollMirroring = true;
+        rail.scrollLeft = pane.scrollLeft;
+        queueMicrotask(() => {
+            _scheduleHscrollMirroring = false;
+        });
+    };
+
+    pane.addEventListener('scroll', mirrorPaneToRail, { passive: true });
+    rail.addEventListener(
+        'scroll',
+        () => {
+            if (_scheduleHscrollMirroring) return;
+            _scheduleHscrollMirroring = true;
+            pane.scrollLeft = rail.scrollLeft;
+            queueMicrotask(() => {
+                _scheduleHscrollMirroring = false;
+            });
+        },
+        { passive: true }
+    );
+    window.addEventListener(
+        'resize',
+        () => queueMicrotask(() => refreshScheduleHorizontalScroll()),
+        { passive: true }
+    );
+    window.addEventListener(
+        'scroll',
+        () => queueMicrotask(() => syncScheduleHscrollRailDock()),
+        { passive: true }
+    );
+    if (typeof ResizeObserver !== 'undefined') {
+        const ro = new ResizeObserver(() => refreshScheduleHorizontalScroll());
+        ro.observe(pane);
+        ro.observe(table);
+    }
+}
+
+/** 底部拉杆固定视口；占位宽度与 .schedule-table-scroll 同步；内层滚动条仍隐藏 */
+function refreshScheduleHorizontalScroll() {
+    const pane = elements.scheduleTableScroll;
+    const rail = elements.scheduleHscrollRail;
+    const spacer = elements.scheduleHscrollSpacer;
+    const table = elements.scheduleTable;
+    if (!pane || !rail || !spacer || !table) return;
+
+    syncScheduleHscrollRailDock();
+
+    const paneW = pane.clientWidth;
+    const contentW = Math.max(table.scrollWidth || 0, pane.scrollWidth || 0);
+    spacer.style.width = `${Math.max(contentW, paneW)}px`;
+
+    if (_scheduleHscrollMirroring) return;
+    _scheduleHscrollMirroring = true;
+    rail.scrollLeft = pane.scrollLeft;
+    queueMicrotask(() => {
+        _scheduleHscrollMirroring = false;
+    });
+}
 
 function updateStorageLocationHint() {
     const el = elements.storageLocationHint;
@@ -125,25 +226,36 @@ function normalizeUserAccountSets(rawSets, role) {
     return cleaned.length ? cleaned : ['CNO.H'];
 }
 
+/** 登录输入与存储密码 NFC + trim，减轻手机输入法全角/兼容字符导致的「密码不对」误判 */
+function normalizeLoginCredential(raw) {
+    let s = String(raw ?? '');
+    if (typeof s.normalize === 'function') s = s.normalize('NFKC');
+    return s.trim().replace(/\u3000/g, '');
+}
+
+function normalizeStoredUserArray(parsed) {
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+        .map((u) => ({
+            username: normalizeUsername(u.username),
+            password: String(u.password || ''),
+            role: u.role === 'admin' ? 'admin' : 'user',
+            canEditPlan: !!u.canEditPlan,
+            canEditActual: !!u.canEditActual,
+            accountSets: normalizeUserAccountSets(u.accountSets, u.role === 'admin' ? 'admin' : 'user'),
+            enabled: u.enabled !== false,
+            failedLoginCount: Number.isFinite(Number(u.failedLoginCount)) ? Number(u.failedLoginCount) : 0,
+            lockedUntil: Number.isFinite(Number(u.lockedUntil)) ? Number(u.lockedUntil) : 0
+        }))
+        .filter((u) => !!u.username);
+}
+
 function loadUsers() {
     try {
         const raw = localStorage.getItem(USERS_STORAGE_KEY);
         if (!raw) return [...DEFAULT_USERS];
         const parsed = JSON.parse(raw);
-        if (!Array.isArray(parsed) || !parsed.length) return [...DEFAULT_USERS];
-        const cleaned = parsed
-            .map((u) => ({
-                username: normalizeUsername(u.username),
-                password: String(u.password || ''),
-                role: u.role === 'admin' ? 'admin' : 'user',
-                canEditPlan: !!u.canEditPlan,
-                canEditActual: !!u.canEditActual,
-                accountSets: normalizeUserAccountSets(u.accountSets, u.role === 'admin' ? 'admin' : 'user'),
-                enabled: u.enabled !== false,
-                failedLoginCount: Number.isFinite(Number(u.failedLoginCount)) ? Number(u.failedLoginCount) : 0,
-                lockedUntil: Number.isFinite(Number(u.lockedUntil)) ? Number(u.lockedUntil) : 0
-            }))
-            .filter((u) => !!u.username);
+        const cleaned = normalizeStoredUserArray(parsed);
         return cleaned.length ? cleaned : [...DEFAULT_USERS];
     } catch (err) {
         console.warn('Failed to parse users from localStorage, fallback to defaults.', err);
@@ -151,8 +263,70 @@ function loadUsers() {
     }
 }
 
+let _scheduleUsersPushTimer = null;
+
+function pushScheduleUsersToServerOnce() {
+    if (!isHttpBackendPage() || !Array.isArray(state.users) || !state.users.length) return;
+    fetch('/api/schedule-users', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json;charset=utf-8' },
+        body: JSON.stringify(state.users),
+        credentials: 'same-origin',
+        cache: 'no-store',
+    }).catch((e) => console.warn('[schedule-users] 同步到服务器失败', e));
+}
+
+function schedulePushScheduleUsersToServer() {
+    if (!isHttpBackendPage()) return;
+    clearTimeout(_scheduleUsersPushTimer);
+    _scheduleUsersPushTimer = setTimeout(() => {
+        _scheduleUsersPushTimer = null;
+        pushScheduleUsersToServerOnce();
+    }, 80);
+}
+
 function saveUsers() {
-    localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(state.users));
+    try {
+        localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(state.users));
+    } catch (err) {
+        console.warn('无法写入浏览器用户列表缓存（如隐私模式）', err);
+    }
+    schedulePushScheduleUsersToServer();
+}
+
+/**
+ * HTTP 模式下从 SQLite（kv.scheduleUsers）拉取与各终端共用的账号库；
+ * 若服务器尚无数据则用本机 localStorage（或默认）并回写服务端，避免手机与电脑各用各的 localStorage 导致密码不一致。
+ */
+async function hydrateScheduleUsersBeforeInit() {
+    if (!isHttpBackendPage()) {
+        state.users = loadUsers();
+        return;
+    }
+    try {
+        const r = await fetch('/api/schedule-users', { cache: 'no-store' });
+        if (!r.ok) {
+            state.users = loadUsers();
+            return;
+        }
+        const data = await r.json();
+        const hasServerUsers = Array.isArray(data) && data.length > 0;
+        if (hasServerUsers) {
+            const nu = normalizeStoredUserArray(data);
+            state.users = nu.length ? nu : loadUsers();
+        } else {
+            state.users = loadUsers();
+            pushScheduleUsersToServerOnce();
+        }
+    } catch (e) {
+        console.warn('从服务器读取用户列表失败，使用本机数据。', e);
+        state.users = loadUsers();
+    }
+    try {
+        localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(state.users));
+    } catch {
+        /* ignore */
+    }
 }
 
 function getLockRemainMs(user) {
@@ -186,15 +360,20 @@ function isCurrentUserAdmin() {
 function canEditPlan() {
     if (isViewingHistory()) return false;
     const profile = getCurrentUserProfile();
-    if (!profile) return false;
+    if (!profile || profile.enabled === false) return false;
     return profile.role === 'admin' || !!profile.canEditPlan;
 }
 
 function canEditActual() {
     if (isViewingHistory()) return false;
     const profile = getCurrentUserProfile();
-    if (!profile) return false;
+    if (!profile || profile.enabled === false) return false;
     return profile.role === 'admin' || !!profile.canEditActual;
+}
+
+/** 计薪类型、备注：与计划/实到同属业务编辑，至少需具备其一（管理员已由 canEdit* 覆盖） */
+function canEditPayTypeAndNote() {
+    return canEditPlan() || canEditActual();
 }
 
 function applyAuthUi() {
@@ -224,7 +403,9 @@ function applyAuthUi() {
 }
 
 function init() {
-    state.users = loadUsers();
+    if (!Array.isArray(state.users) || !state.users.length) {
+        state.users = loadUsers();
+    }
     const profile = getCurrentUserProfile();
     if (!profile) {
         state.currentUser = '';
@@ -235,6 +416,7 @@ function init() {
     populateCompanyFilter();
     refreshHistoryOptions();
     renderSelectedShiftTags();
+    bindScheduleHorizontalScrollOnce();
     renderTable();
     setupEventListeners();
     syncSaveButtonState();
@@ -262,9 +444,12 @@ async function switchAccountSet(nextSet, forceReload = false) {
         alert('当前用户无该账套访问权限。');
         return;
     }
+    await _persistLaborChain;
     if (!forceReload && state.currentAccountSet === targetSet) return;
     if (state.hasUnsavedChanges) {
-        const ok = window.confirm('当前账套有未保存修改，切换后将丢失未保存内容，是否继续？');
+        const ok = window.confirm(
+            '仍有数据未能写入服务器数据库（可多终端稍后重试）。确定切换账套吗？'
+        );
         if (!ok) return;
     }
     state.currentAccountSet = targetSet;
@@ -299,11 +484,14 @@ async function switchAccountSet(nextSet, forceReload = false) {
 }
 
 function getActiveRows() {
-    return Array.isArray(state.historyData) ? state.historyData : state.data;
+    if (String(state.currentHistoryId || '').trim() !== '' && Array.isArray(state.historyData)) {
+        return state.historyData;
+    }
+    return state.data;
 }
 
 function isViewingHistory() {
-    return Array.isArray(state.historyData);
+    return String(state.currentHistoryId || '').trim() !== '';
 }
 
 /** 备注写入数据库前去掉 NUL，避免部分客户端或查看工具异常截断 */
@@ -319,6 +507,18 @@ function getChangeReason(row) {
     return String(row['变化原因'] || '').trim();
 }
 
+function openChangeReasonModal(text) {
+    if (!elements.changeReasonModal || !elements.changeReasonModalBody) return;
+    elements.changeReasonModalBody.textContent = text || '(无)';
+    elements.changeReasonModal.classList.add('active');
+}
+
+function closeChangeReasonModal() {
+    if (!elements.changeReasonModal) return;
+    elements.changeReasonModal.classList.remove('active');
+    if (elements.changeReasonModalBody) elements.changeReasonModalBody.textContent = '';
+}
+
 function appendPlanChangeReason(row, day, oldValue, newValue, reasonText) {
     const now = new Date();
     const pad = (n) => String(n).padStart(2, '0');
@@ -328,50 +528,30 @@ function appendPlanChangeReason(row, day, oldValue, newValue, reasonText) {
     row['变化原因'] = existing ? `${record} | ${existing}` : record;
 }
 
-function isGroupRow(row) {
-    return /组/.test(getRowNote(row));
-}
-
-function hasLeaderNote(row) {
-    return /(大组长|小组长|班组长)/.test(getRowNote(row));
-}
-
-function getRowFactor(row) {
-    if (hasLeaderNote(row)) return 1;
-    return isGroupRow(row) ? 8 : 1;
-}
-
-function isCnoSubdivisionRole(row) {
-    return String(row['岗位/工作内容'] || '').includes('CNO细分');
-}
+/** 各日「计划」「实到」与库字段一致：按人数存、按人数显示（1:1），不按备注还原「组数」或做 ÷8 折算，避免出现小数或非整数组表示。 */
 
 function getRawDayValue(row, day, type) {
-    if (type === 'plan' && isCnoSubdivisionRole(row)) {
-        return 14;
-    }
     const key = type === 'actual' ? `${day}_实到` : day;
     return parseFloat(row[key]) || 0;
 }
 
 function getDisplayDayValue(row, day, type) {
-    return getRawDayValue(row, day, type) * getRowFactor(row);
+    return getRawDayValue(row, day, type);
 }
 
 function setRawDayValueFromDisplay(row, day, type, displayValue) {
     const key = type === 'actual' ? `${day}_实到` : day;
-    if (type === 'plan' && isCnoSubdivisionRole(row)) {
-        return;
-    }
-    const factor = getRowFactor(row);
     const numeric = parseFloat(displayValue) || 0;
-    row[key] = numeric / factor;
+    row[key] = numeric;
 }
 
 /** 统一「计时 / 计件」，避免全角空格或 Unicode 规范化差异导致保存成计时 */
 function normalizePayType(raw) {
     let s = String(raw ?? '').trim().replace(/\u3000/g, '');
     if (typeof s.normalize === 'function') s = s.normalize('NFKC');
-    return s === '计件' ? '计件' : '计时';
+    const lower = s.toLowerCase();
+    if (s === '计件' || s === '計件' || lower === 'piece' || lower === 'piecework') return '计件';
+    return '计时';
 }
 
 function normalizeLaborRowsPayType(rows) {
@@ -406,15 +586,21 @@ function ensureLaborRowUids(rows) {
 function findDataRowByUid(uid) {
     const id = String(uid || '').trim();
     if (!id) return null;
-    return state.data.find((r) => r && String(r._rowUid || '').trim() === id) || null;
+    const rows = getActiveRows();
+    return rows.find((r) => r && String(r._rowUid || '').trim() === id) || null;
 }
 
 function syncSaveButtonState() {
     if (!elements.btnSaveRecords) return;
     const profile = getCurrentUserProfile();
-    if (!profile) {
+    if (!profile || profile.enabled === false) {
         elements.btnSaveRecords.disabled = true;
         elements.btnSaveRecords.innerHTML = '<i class="ri-save-3-line"></i> 请先登录后保存';
+        return;
+    }
+    if (!canEditPlan() && !canEditActual()) {
+        elements.btnSaveRecords.disabled = true;
+        elements.btnSaveRecords.innerHTML = '<i class="ri-lock-line"></i> 无排班编辑权限';
         return;
     }
     if (isViewingHistory()) {
@@ -424,13 +610,64 @@ function syncSaveButtonState() {
     }
     elements.btnSaveRecords.disabled = false;
     elements.btnSaveRecords.innerHTML = state.hasUnsavedChanges
-        ? '<i class="ri-check-line"></i> 提交保存'
-        : '<i class="ri-save-3-line"></i> 保存到数据库';
+        ? '<i class="ri-error-warning-line"></i> 写入失败，点击重试'
+        : '<i class="ri-database-2-line"></i> 已写入数据库';
 }
 
-function markUnsavedChanges() {
+/** 串行执行，避免并发 PUT 互相覆盖 */
+let _persistLaborChain = Promise.resolve();
+let _lastLaborPersistErrorAlert = 0;
+
+function enqueuePersistLaborToDb() {
+    if (isViewingHistory()) return;
+    const profile = getCurrentUserProfile();
+    if (!profile || profile.enabled === false) return;
+    if (!canEditPlan() && !canEditActual()) return;
     state.hasUnsavedChanges = true;
     syncSaveButtonState();
+    _persistLaborChain = _persistLaborChain.then(() => persistLaborToServerOnce());
+}
+
+let _debouncedNotePersistTimer = null;
+
+/** 备注连续输入时防抖写入数据库（停止输入约 0.55s 后 PUT） */
+function scheduleDebouncedNotePersist(textarea, rowUid) {
+    if (isViewingHistory()) return;
+    if (!canEditPayTypeAndNote()) return;
+    const row = findDataRowByUid(rowUid);
+    if (!row || !textarea) return;
+    row['备注'] = sanitizeNoteForDb(textarea.value);
+    clearTimeout(_debouncedNotePersistTimer);
+    _debouncedNotePersistTimer = setTimeout(() => {
+        _debouncedNotePersistTimer = null;
+        enqueuePersistLaborToDb();
+    }, 550);
+}
+
+async function persistLaborToServerOnce() {
+    try {
+        flushPendingNoteInputs();
+        flushPendingRoleInputs();
+        flushPendingShiftInputs();
+        flushPendingPayTypeSelects();
+        flushPendingDayInputs();
+        ensureLaborRowUids(state.data);
+        normalizeLaborRowsPayType(state.data);
+        await window.scheduleDb.saveLaborDataToDb(state.data, state.currentAccountSet);
+        state.hasUnsavedChanges = false;
+        _lastLaborPersistErrorAlert = 0;
+        syncSaveButtonState();
+        await refreshHistoryOptions();
+    } catch (err) {
+        console.error(err);
+        state.hasUnsavedChanges = true;
+        syncSaveButtonState();
+        const now = Date.now();
+        if (now - _lastLaborPersistErrorAlert > 4000) {
+            _lastLaborPersistErrorAlert = now;
+            alert('写入数据库失败：' + (err && err.message ? err.message : String(err)));
+        }
+    }
 }
 
 function flushPendingNoteInputs() {
@@ -499,26 +736,17 @@ async function saveChanges() {
         alert('当前为历史查看模式，无法保存。请先点击“回到最新”。');
         return;
     }
-    if (!getCurrentUserProfile()) {
+    const profile = getCurrentUserProfile();
+    if (!profile || profile.enabled === false) {
         alert('请先登录后再保存。');
         return;
     }
-    try {
-        flushPendingNoteInputs();
-        flushPendingRoleInputs();
-        flushPendingShiftInputs();
-        flushPendingPayTypeSelects();
-        flushPendingDayInputs();
-        ensureLaborRowUids(state.data);
-        normalizeLaborRowsPayType(state.data);
-        await window.scheduleDb.saveLaborDataToDb(state.data, state.currentAccountSet);
-        state.hasUnsavedChanges = false;
-        syncSaveButtonState();
-        await refreshHistoryOptions();
-    } catch (err) {
-        console.error(err);
-        alert('保存到数据库失败：' + (err && err.message ? err.message : String(err)));
+    if (!canEditPlan() && !canEditActual()) {
+        alert('当前账号无排班编辑权限。');
+        return;
     }
+    await _persistLaborChain;
+    await persistLaborToServerOnce();
 }
 
 function formatHistoryLabel(item) {
@@ -629,7 +857,7 @@ function submitNewRecord() {
     }
     const row = createEmptyRecordRow(company, shift || '常规班次', role, note);
     state.data.push(row);
-    markUnsavedChanges();
+    enqueuePersistLaborToDb();
     populateCompanyFilter();
     if (elements.companyFilter && company) {
         elements.companyFilter.value = company;
@@ -818,7 +1046,7 @@ function deleteUser(username) {
 
 function handleLogin() {
     const username = normalizeUsername(elements.loginUsername ? elements.loginUsername.value : '');
-    const password = String(elements.loginPassword ? elements.loginPassword.value : '').trim();
+    const password = normalizeLoginCredential(elements.loginPassword ? elements.loginPassword.value : '');
     const user = state.users.find((u) => u.username === username);
     if (!user) {
         alert('账号或密码错误。');
@@ -833,7 +1061,7 @@ function handleLogin() {
         alert(`账号已锁定，请稍后再试（剩余 ${formatLockRemain(lockRemain)}）`);
         return;
     }
-    if (user.password !== password) {
+    if (normalizeLoginCredential(user.password) !== password) {
         user.failedLoginCount = (user.failedLoginCount || 0) + 1;
         if (user.failedLoginCount >= MAX_LOGIN_ATTEMPTS) {
             user.lockedUntil = Date.now() + LOCK_MINUTES * 60 * 1000;
@@ -859,8 +1087,15 @@ function handleLogin() {
     }
     state.currentUser = user.username;
     state.currentAccountSet = chosenSet;
-    localStorage.setItem('currentUser', user.username);
-    localStorage.setItem('currentAccountSet', state.currentAccountSet);
+    try {
+        localStorage.setItem('currentUser', user.username);
+        localStorage.setItem('currentAccountSet', state.currentAccountSet);
+    } catch (err) {
+        console.warn(
+            '无法在浏览器中写入登录状态（可能被跟踪防护拦截）；仍可继续使用，修改会通过服务器写入数据库。',
+            err
+        );
+    }
     state.historyData = null;
     state.currentHistoryId = '';
     if (elements.loginPassword) elements.loginPassword.value = '';
@@ -868,9 +1103,14 @@ function handleLogin() {
     switchAccountSet(state.currentAccountSet, true);
 }
 
-function handleLogout() {
+async function handleLogout() {
+    await _persistLaborChain;
+    clearTimeout(_debouncedNotePersistTimer);
+    _debouncedNotePersistTimer = null;
     state.currentUser = '';
-    localStorage.removeItem('currentUser');
+    try {
+        localStorage.removeItem('currentUser');
+    } catch (_) { /* ignore */ }
     state.historyData = null;
     state.currentHistoryId = '';
     checkAuth();
@@ -896,10 +1136,10 @@ function closeChangePasswordModal() {
 function submitChangePassword() {
     const current = getCurrentUserProfile();
     if (!current) return;
-    const oldPwd = String(elements.changeOldPassword ? elements.changeOldPassword.value : '').trim();
+    const oldPwd = normalizeLoginCredential(elements.changeOldPassword ? elements.changeOldPassword.value : '');
     const newPwd = String(elements.changeNewPassword ? elements.changeNewPassword.value : '').trim();
     const confirmPwd = String(elements.changeConfirmPassword ? elements.changeConfirmPassword.value : '').trim();
-    if (oldPwd !== current.password) {
+    if (normalizeLoginCredential(current.password) !== oldPwd) {
         alert('旧密码不正确。');
         return;
     }
@@ -1296,18 +1536,6 @@ function renderTable() {
         return `company-color-${idx}`;
     }
 
-    function getGroupHint(noteText) {
-        const text = String(noteText || '').trim();
-        if (!text) return '';
-        if (/(大组长|小组长|班组长)/.test(text)) return '';
-        const match = text.match(/(\d+(?:\.\d+)?)\s*组/);
-        if (!match) return /组/.test(text) ? '按组计：1组=8人' : '';
-        const groups = parseFloat(match[1]);
-        if (Number.isNaN(groups)) return '';
-        const people = groups * 8;
-        return `${groups}组=${Number.isInteger(people) ? people : people.toFixed(1)}人`;
-    }
-
     sortedData.forEach((row, index) => {
         const company = row['劳务公司/归属'];
         const shift = sanitizeShiftName(row['班次名称']);
@@ -1336,7 +1564,7 @@ function renderTable() {
             const plan = getDisplayDayValue(row, day, 'plan');
             const actual = getDisplayDayValue(row, day, 'actual');
             const statusClass = actual < plan ? 'shortfall' : (actual > plan ? 'overage' : '');
-            const planEditor = canEditPlan() && !isCnoSubdivisionRole(row)
+            const planEditor = canEditPlan()
                 ? `<input type="number" class="plan-input" data-row-uid="${rowUid}" data-day="${day}" value="${plan}" onchange="updatePlan(this, '${rowUid}', '${day}')">`
                 : `<span class="plan-label">${plan}</span>`;
             const actualEditor = canEditActual()
@@ -1360,7 +1588,6 @@ function renderTable() {
         const shiftCellAlertClass = rowPlanTotal <= 0 ? 'shift-empty-warning' : '';
         const roleText = row['岗位/工作内容'] || '';
         const noteValue = getRowNote(row);
-        const groupHint = getGroupHint(noteValue);
         const changeReason = getChangeReason(row);
         const roleCellContent = editableRow && isCurrentUserAdmin()
             ? `<input type="text" class="role-edit-input" data-row-uid="${rowUid}" value="${escapeHtml(roleText)}" onchange="updateJobContent(this, '${rowUid}')">`
@@ -1383,6 +1610,7 @@ function renderTable() {
                 </div>
             `;
         const payTypeClass = payType === '计件' ? 'pay-type-piece' : 'pay-type-hourly';
+        const canShared = editableRow && canEditPayTypeAndNote();
         html += `
             <tr class="data-row">
                 <td><span class="company-tag ${companyColorClass}">${escapeHtml(company)}</span></td>
@@ -1390,7 +1618,7 @@ function renderTable() {
                     ${shiftCellContent}
                 </td>
                 <td>
-                    ${editableRow
+                    ${canShared
                         ? `<select class="pay-type-select ${payTypeClass}" data-row-uid="${rowUid}" onchange="updatePayType(this, '${rowUid}')">
                             <option value="计时" ${payType === '计时' ? 'selected' : ''}>计时</option>
                             <option value="计件" ${payType === '计件' ? 'selected' : ''}>计件</option>
@@ -1402,14 +1630,19 @@ function renderTable() {
                 ${cells}
                 <td class="note-cell">
                     <div class="note-wrap">
-                        ${editableRow
-                            ? `<textarea class="note-input" data-row-uid="${rowUid}" rows="2" wrap="soft" spellcheck="false" onchange="updateNote(this, '${rowUid}')">${escapeHtml(noteValue)}</textarea>`
+                        ${canShared
+                            ? `<textarea class="note-input" data-row-uid="${rowUid}" rows="2" wrap="soft" spellcheck="false" oninput="scheduleDebouncedNotePersist(this, '${rowUid}')" onchange="updateNote(this, '${rowUid}')">${escapeHtml(noteValue)}</textarea>`
                             : `<span class="plan-label note-readonly">${escapeHtml(noteValue) || '-'}</span>`
                         }
-                        ${groupHint ? `<span class="note-group-hint">${escapeHtml(groupHint)}</span>` : ''}
                     </div>
                 </td>
-                <td><div class="reason-cell" title="${escapeHtml(changeReason)}">${escapeHtml(changeReason)}</div></td>
+                <td class="reason-cell-wrap">
+                    ${
+                        changeReason
+                            ? `<button type="button" class="reason-detail-btn" data-row-uid="${rowUid}" title="查看完整变化原因" aria-label="查看完整变化原因"><i class="ri-file-list-3-line" aria-hidden="true"></i></button>`
+                            : `<span class="reason-empty">—</span>`
+                    }
+                </td>
             </tr>
         `;
     });
@@ -1477,6 +1710,7 @@ function applyFilters() {
         const day = cell.getAttribute('data-day-col');
         cell.style.display = checkedDays.includes(day) ? '' : 'none';
     });
+    requestAnimationFrame(() => refreshScheduleHorizontalScroll());
 }
 
 function getFilteredData() {
@@ -1544,8 +1778,8 @@ function updateActual(input, rowUid, day) {
     const value = parseFloat(input.value) || 0;
 
     setRawDayValueFromDisplay(row, day, 'actual', value);
-    markUnsavedChanges();
-    
+    enqueuePersistLaborToDb();
+
     const plan = getDisplayDayValue(row, day, 'plan');
     input.classList.remove('shortfall', 'overage');
     if (value < plan) input.classList.add('shortfall');
@@ -1576,26 +1810,42 @@ function updatePlan(input, rowUid, day) {
         appendPlanChangeReason(row, day, oldDisplayValue, value, reason);
     }
     setRawDayValueFromDisplay(row, day, 'plan', value);
-    markUnsavedChanges();
+    enqueuePersistLaborToDb();
     renderTable(); // Re-render to refresh subtotal and variance styles
 }
 
 function updateNote(input, rowUid) {
     if (isViewingHistory()) return;
+    if (!canEditPayTypeAndNote()) {
+        renderTable();
+        return;
+    }
     const row = findDataRowByUid(rowUid);
     if (!row) return;
+    clearTimeout(_debouncedNotePersistTimer);
+    _debouncedNotePersistTimer = null;
     row['备注'] = sanitizeNoteForDb(input.value);
-    markUnsavedChanges();
+    enqueuePersistLaborToDb();
     renderTable();
 }
 
 function updatePayType(selectEl, rowUid) {
     if (isViewingHistory()) return;
+    if (!canEditPayTypeAndNote()) {
+        renderTable();
+        return;
+    }
     const row = findDataRowByUid(rowUid);
     if (!row) return;
     const selected = String(selectEl && selectEl.value ? selectEl.value : '').trim();
     row['计薪类型'] = normalizePayType(selected);
-    markUnsavedChanges();
+    const pt = row['计薪类型'];
+    /* 筛选为单一计薪类型时，改类型会导致本行被剔出表格，看起来像「保存失败」——改为显示全部 */
+    if (state.currentPayType !== 'ALL' && pt !== state.currentPayType) {
+        state.currentPayType = 'ALL';
+        if (elements.payTypeFilter) elements.payTypeFilter.value = 'ALL';
+    }
+    enqueuePersistLaborToDb();
     renderTable();
 }
 
@@ -1609,7 +1859,7 @@ function updateShiftName(input, rowUid) {
     if (!row) return;
     const value = String(input.value || '').trim() || '常规班次';
     row['班次名称'] = value;
-    markUnsavedChanges();
+    enqueuePersistLaborToDb();
     populateCompanyFilter();
     renderTable();
 }
@@ -1623,7 +1873,7 @@ function updateJobContent(input, rowUid) {
     const row = findDataRowByUid(rowUid);
     if (!row) return;
     row['岗位/工作内容'] = String(input.value ?? '').replace(/\u0000/g, '').trim();
-    markUnsavedChanges();
+    enqueuePersistLaborToDb();
     populateCompanyFilter();
     renderTable();
 }
@@ -1641,7 +1891,7 @@ function deleteScheduleRow(rowUid) {
     const shiftName = String(row['班次名称'] || '常规班次');
     if (!window.confirm(`确认删除班次记录「${shiftName}」吗？`)) return;
     state.data.splice(idx, 1);
-    markUnsavedChanges();
+    enqueuePersistLaborToDb();
     populateCompanyFilter();
     renderTable();
 }
@@ -1846,12 +2096,36 @@ function setupEventListeners() {
         elements.screenshotExit.addEventListener('click', () => toggleScreenshotMode(false));
     }
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && document.body.classList.contains('screenshot-active')) {
-            toggleScreenshotMode(false);
+        if (e.key === 'Escape') {
+            if (elements.changeReasonModal && elements.changeReasonModal.classList.contains('active')) {
+                closeChangeReasonModal();
+                return;
+            }
+            if (document.body.classList.contains('screenshot-active')) {
+                toggleScreenshotMode(false);
+            }
         }
     });
     elements.btnSaveRecords.addEventListener('click', saveChanges);
     elements.btnExport.addEventListener('click', exportCurrentView);
+    if (elements.scheduleTable) {
+        elements.scheduleTable.addEventListener('click', (e) => {
+            const btn = e.target.closest('.reason-detail-btn');
+            if (!btn) return;
+            e.preventDefault();
+            const uid = btn.getAttribute('data-row-uid') || '';
+            const row = findDataRowByUid(uid);
+            openChangeReasonModal(row ? getChangeReason(row) : '');
+        });
+    }
+    if (elements.changeReasonModalClose) {
+        elements.changeReasonModalClose.addEventListener('click', closeChangeReasonModal);
+    }
+    if (elements.changeReasonModal) {
+        elements.changeReasonModal.addEventListener('click', (e) => {
+            if (e.target === elements.changeReasonModal) closeChangeReasonModal();
+        });
+    }
     if (elements.btnAddRecord) {
         elements.btnAddRecord.addEventListener('click', () => {
             if (!state.currentUser) {
@@ -1878,7 +2152,7 @@ function setupEventListeners() {
             if (e.key === 'Enter') handleLogin();
         });
     }
-    elements.btnLogout.addEventListener('click', handleLogout);
+    elements.btnLogout.addEventListener('click', () => void handleLogout());
     window.addEventListener('beforeunload', (e) => {
         if (!state.hasUnsavedChanges) return;
         e.preventDefault();
@@ -1912,16 +2186,30 @@ function toggleScreenshotMode(forceState) {
     } catch {
         /* ignore */
     }
+
+    await hydrateScheduleUsersBeforeInit();
+
     try {
         const rows = await window.scheduleDb.loadScheduleData(state.currentAccountSet);
         state.data = Array.isArray(rows) ? rows : [];
         ensureLaborRowUids(state.data);
         normalizeLaborRowsPayType(state.data);
     } catch (err) {
-        console.warn('SQLite 加载失败，回退 localStorage / 示例数据', err);
-        state.data = safeLoadData();
-        ensureLaborRowUids(state.data);
-        normalizeLaborRowsPayType(state.data);
+        console.error('加载排班数据失败', err);
+        if (isHttpBackendPage()) {
+            alert(
+                (err && err.message ? err.message : String(err)) +
+                    '\n\n通过 http(s) 访问时数据仅从服务器加载，不会使用浏览器本地副本。'
+            );
+            state.data = [];
+            ensureLaborRowUids(state.data);
+            normalizeLaborRowsPayType(state.data);
+        } else {
+            console.warn('回退 localStorage / 示例数据', err);
+            state.data = safeLoadData();
+            ensureLaborRowUids(state.data);
+            normalizeLaborRowsPayType(state.data);
+        }
     }
     init();
 })();

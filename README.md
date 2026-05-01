@@ -19,7 +19,7 @@
 | 数据库 | 项目根目录 `schedule.sqlite`（已纳入版本库，便于协作与备份） |
 | 可选脚本 | `convert_excel.py`、`read_excel.py`（Excel 相关）；`restore_from_data_js.py`（从 `frontend/data.js` 恢复库） |
 
-前端依赖通过 CDN 加载（如 XLSX、html2canvas、Remix Icon），无需单独执行 `npm install`。
+前端依赖通过 CDN 加载（如 XLSX、Remix Icon），无需单独执行 `npm install`。
 
 ## 环境要求
 

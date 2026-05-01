@@ -11,6 +11,8 @@
     --border: #dbe3ef;
     --shortfall: #dc2626;
     --overage: #d97706;
+    --plan-actual-split-w: 104px;
+    --schedule-hscroll-slot: 36px;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -19,8 +21,8 @@ body {
     font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     background: var(--bg);
     color: var(--text);
-    padding: 24px;
-    line-height: 1.5;
+    padding: 16px 16px calc(16px + var(--schedule-hscroll-slot) + env(safe-area-inset-bottom, 0px)) 16px;
+    line-height: 1.35;
 }
 
 .container {
@@ -32,18 +34,18 @@ body {
     background: linear-gradient(135deg, #f8fbff, #f1f7ff);
     border: 1px solid var(--border);
     border-radius: 16px;
-    padding: 16px 20px;
-    margin-bottom: 16px;
+    padding: 12px 16px;
+    margin-bottom: 12px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 16px;
+    gap: 10px;
 }
 
 .brand {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 8px;
 }
 
 .brand-icon {
@@ -124,18 +126,18 @@ body {
 .stats-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(180px, 1fr));
-    gap: 12px;
-    margin-bottom: 16px;
+    gap: 8px;
+    margin-bottom: 12px;
 }
 
 .stat-card {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 14px;
-    padding: 14px 16px;
+    padding: 10px 12px;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 3px;
 }
 
 .stat-label {
@@ -159,19 +161,19 @@ body {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 14px;
-    padding: 14px 16px;
-    margin-bottom: 16px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
     display: flex;
     flex-wrap: wrap;
     align-items: flex-start;
-    gap: 14px;
+    gap: 8px;
 }
 
 .control-block {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    min-width: 180px;
+    gap: 4px;
+    min-width: 160px;
     justify-content: flex-start;
 }
 
@@ -340,21 +342,84 @@ body {
     margin-left: auto;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
 }
 
 .table-card {
     background: #fff;
     border: 1px solid var(--border);
     border-radius: 14px;
-    overflow: auto;
+    overflow: hidden;
+}
+
+.schedule-table-scroll {
+    overflow-x: auto;
+    overflow-y: visible;
+    max-width: 100%;
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+.schedule-table-scroll::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+}
+
+/* 固定在视口底部，与表格滚动区域同宽对齐（left/width 由 JS 同步） */
+.schedule-hscroll-rail {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100vw;
+    z-index: 500;
+    display: block;
+    box-sizing: border-box;
+    max-width: 100vw;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 4px 0 calc(8px + env(safe-area-inset-bottom, 0px));
+    margin: 0;
+    scrollbar-width: auto;
+    scrollbar-color: #64748b #e2e8f0;
+    background: rgba(255, 255, 255, 0.96);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border-top: 1px solid var(--border);
+    box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.08);
+}
+
+/* 底部横向拉杆：易于抓取 */
+.schedule-hscroll-rail::-webkit-scrollbar {
+    height: 14px;
+}
+
+.schedule-hscroll-rail::-webkit-scrollbar-track {
+    background: #e2e8f0;
+    border-radius: 999px;
+    margin-inline: 4px;
+}
+
+.schedule-hscroll-rail::-webkit-scrollbar-thumb {
+    background: #64748b;
+    border-radius: 999px;
+    border: 3px solid #e2e8f0;
+}
+
+.schedule-hscroll-rail::-webkit-scrollbar-thumb:hover {
+    background: #475569;
+}
+
+.schedule-hscroll-spacer {
+    height: 1px;
+    pointer-events: none;
 }
 
 .schedule-table {
     width: 100%;
     border-collapse: separate;
     border-spacing: 0;
-    min-width: 1240px;
+    min-width: 1176px;
 }
 
 .schedule-table th {
@@ -363,7 +428,7 @@ body {
     font-size: 12px;
     font-weight: 800;
     text-align: left;
-    padding: 9px 8px;
+    padding: 6px 4px;
     border-bottom: 1px solid var(--border);
     position: sticky;
     top: 0;
@@ -374,7 +439,7 @@ body {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 2px;
+    gap: 0;
 }
 
 .day-title {
@@ -383,13 +448,17 @@ body {
     color: #334155;
 }
 
+/* 日期列：计划与实到中缝不留空 — 两栏等宽拉满控件 */
 .day-subheads {
     display: grid;
-    grid-template-columns: 64px 64px;
-    gap: 2px;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 0;
+    row-gap: 0;
     align-items: center;
-    justify-items: center;
-    justify-content: center;
+    justify-items: stretch;
+    width: var(--plan-actual-split-w);
+    margin-inline: auto;
+    box-sizing: border-box;
     font-size: 11px;
     font-weight: 700;
     color: #94a3b8;
@@ -406,7 +475,7 @@ body {
 }
 
 .schedule-table td {
-    padding: 3px 6px;
+    padding: 2px 3px;
     border-bottom: 1px solid #edf2f7;
     font-size: 11px;
     vertical-align: middle;
@@ -416,6 +485,7 @@ body {
 .schedule-table td.col-day {
     text-align: center;
     vertical-align: middle;
+    padding: 2px 1px;
 }
 
 .schedule-table td.col-day > .cell-split {
@@ -496,8 +566,8 @@ body {
 }
 
 .footer-total-split .footer-total-placeholder {
-    display: inline-block;
-    width: 64px;
+    display: block;
+    width: 100%;
     min-height: 1em;
 }
 
@@ -738,23 +808,32 @@ body {
 
 .cell-split {
     display: grid;
-    grid-template-columns: 64px 64px;
-    align-items: center;
-    justify-content: center;
-    justify-items: center;
-    gap: 1px;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 0;
+    row-gap: 0;
+    width: var(--plan-actual-split-w);
+    margin-inline: auto;
+    align-items: stretch;
+    justify-items: stretch;
+    box-sizing: border-box;
 }
 
 .plan-wrap {
-    display: inline-flex;
-    align-items: center;
+    display: flex;
+    align-items: stretch;
     gap: 0;
-    width: 64px;
-    justify-content: center;
+    width: 100%;
+    min-width: 0;
 }
 
 .plan-label {
-    width: 52px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-width: 0;
+    min-height: 22px;
+    box-sizing: border-box;
     text-align: center;
     color: #94a3b8;
     font-size: 11px;
@@ -762,8 +841,11 @@ body {
 }
 
 .plan-input {
-    width: 52px;
+    flex: 1;
+    width: 100%;
+    min-width: 0;
     height: 22px;
+    box-sizing: border-box;
     border: 1px solid var(--border);
     border-radius: 8px;
     text-align: center;
@@ -780,8 +862,11 @@ body {
 }
 
 .actual-input {
-    width: 52px;
+    flex: 1;
+    width: 100%;
+    min-width: 0;
     height: 22px;
+    box-sizing: border-box;
     border: 1px solid var(--border);
     border-radius: 8px;
     text-align: center;
@@ -795,6 +880,24 @@ body {
     border-color: #60a5fa;
     box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.25);
     outline: none;
+}
+
+/* 两侧皆为数字输入时连成一体，贴合无中缝留白 */
+.cell-split:has(.plan-wrap .plan-input):has(.actual-wrap .actual-input) .plan-input {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    border-right: none;
+}
+
+.cell-split:has(.plan-wrap .plan-input):has(.actual-wrap .actual-input) .actual-input {
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+}
+
+.cell-split:has(.plan-wrap .plan-input):has(.actual-wrap .actual-input) .actual-input.shortfall,
+.cell-split:has(.plan-wrap .plan-input):has(.actual-wrap .actual-input) .actual-input.overage {
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
 }
 
 /* 数字框仅保留直接输入，隐藏上下步进按钮 */
@@ -825,11 +928,11 @@ body {
 }
 
 .actual-wrap {
-    display: inline-flex;
-    align-items: center;
+    display: flex;
+    align-items: stretch;
     gap: 0;
-    width: 64px;
-    justify-content: center;
+    width: 100%;
+    min-width: 0;
 }
 
 .note-cell {
@@ -868,18 +971,6 @@ body {
     gap: 6px;
 }
 
-.note-group-hint {
-    flex-shrink: 0;
-    font-size: 10px;
-    font-weight: 700;
-    color: #0f766e;
-    background: #ecfeff;
-    border: 1px solid #99f6e4;
-    border-radius: 999px;
-    padding: 1px 6px;
-    white-space: nowrap;
-}
-
 .screenshot-exit-btn {
     position: fixed;
     right: 14px;
@@ -899,14 +990,59 @@ body {
     background: #f8fafc;
 }
 
-.reason-cell {
-    min-width: 220px;
-    max-width: 320px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    font-size: 11px;
-    color: #334155;
+.modal-content.modal-change-reason {
+    max-width: min(560px, 92vw);
+}
+
+.change-reason-modal-body {
+    max-height: min(420px, 60vh);
+    overflow: auto;
+    margin: 0 0 8px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #f8fafc;
+    color: #1e293b;
+    font-size: 13px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.reason-cell-wrap {
+    text-align: center;
+    vertical-align: middle;
+    width: 1%;
+    padding: 4px 6px !important;
+}
+
+.reason-detail-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    margin: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #fff;
+    color: var(--primary-strong);
+    cursor: pointer;
+}
+
+.reason-detail-btn:hover {
+    background: var(--primary-soft);
+}
+
+.reason-detail-btn i {
+    font-size: 1.15rem;
+}
+
+.reason-empty {
+    color: #94a3b8;
+    font-size: 13px;
+    user-select: none;
 }
 
 .btn {
@@ -1149,6 +1285,10 @@ body.screenshot-active .screenshot-exit-btn {
 
 body.screenshot-active {
     padding: 0;
+}
+
+body.screenshot-active .schedule-hscroll-rail {
+    display: none !important;
 }
 
 body.screenshot-active .table-card {

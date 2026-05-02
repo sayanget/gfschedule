@@ -27,6 +27,7 @@ const state = {
     shiftQuery: '',
     shiftQueries: [],
     searchQuery: '',
+    weekStartDate: '',
     currentHistorySavedAt: '',
     currentUser: (() => {
         try {
@@ -117,7 +118,8 @@ const elements = {
     changePasswordSubmit: document.getElementById('change-password-submit'),
     changeReasonModal: document.getElementById('change-reason-modal'),
     changeReasonModalBody: document.getElementById('change-reason-modal-body'),
-    changeReasonModalClose: document.getElementById('change-reason-modal-close')
+    changeReasonModalClose: document.getElementById('change-reason-modal-close'),
+    weekStartDate: document.getElementById('week-start-date')
 };
 
 let _scheduleHscrollMirroring = false;
@@ -418,6 +420,20 @@ function init() {
     refreshHistoryOptions();
     renderSelectedShiftTags();
     bindScheduleHorizontalScrollOnce();
+    
+    // Initialize Week Start Date
+    if (elements.weekStartDate) {
+        const now = new Date();
+        const day = now.getDay();
+        const diff = now.getDate() - day + (day === 0 ? -6 : 1);
+        const monday = new Date(now.setDate(diff));
+        const yyyy = monday.getFullYear();
+        const mm = String(monday.getMonth() + 1).padStart(2, '0');
+        const dd = String(monday.getDate()).padStart(2, '0');
+        state.weekStartDate = `${yyyy}-${mm}-${dd}`;
+        elements.weekStartDate.value = state.weekStartDate;
+    }
+
     renderTable();
     setupEventListeners();
     syncSaveButtonState();
@@ -1469,6 +1485,18 @@ function renderTable() {
     }
 
     let html = '';
+    if (elements.weekStartDate) {
+        elements.weekStartDate.disabled = isViewingHistory();
+        if (isViewingHistory() && state.currentHistorySavedAt) {
+            const d = new Date(state.currentHistorySavedAt.replace(/-/g, '/')); // Handle potential Safari issues
+            const yyyy = d.getFullYear();
+            const mm = String(d.getMonth() + 1).padStart(2, '0');
+            const dd = String(d.getDate()).padStart(2, '0');
+            elements.weekStartDate.value = `${yyyy}-${mm}-${dd}`;
+        } else if (!isViewingHistory()) {
+            elements.weekStartDate.value = state.weekStartDate;
+        }
+    }
     if (!isViewingHistory()) {
         ensureLaborRowUids(state.data);
     }
@@ -1512,7 +1540,9 @@ function renderTable() {
         });
     }
 
-    const baseDate = state.currentHistorySavedAt ? new Date(state.currentHistorySavedAt) : new Date();
+    const baseDate = state.currentHistorySavedAt 
+        ? new Date(state.currentHistorySavedAt) 
+        : (state.weekStartDate ? new Date(state.weekStartDate) : new Date());
     const weekDates = getWeekDates(baseDate);
 
 
@@ -1782,7 +1812,9 @@ function exportCurrentView() {
             return (date.getMonth() + 1) + '/' + date.getDate();
         });
     }
-    const baseDate = state.currentHistorySavedAt ? new Date(state.currentHistorySavedAt) : new Date();
+    const baseDate = state.currentHistorySavedAt 
+        ? new Date(state.currentHistorySavedAt) 
+        : (state.weekStartDate ? new Date(state.weekStartDate) : new Date());
     const weekDates = getWeekDates(baseDate);
 
     const rows = filteredData.map(row => {
@@ -2129,6 +2161,12 @@ function setupEventListeners() {
         applyFilters();
         recalcTotal();
     });
+    if (elements.weekStartDate) {
+        elements.weekStartDate.addEventListener('change', (e) => {
+            state.weekStartDate = e.target.value;
+            renderTable();
+        });
+    }
     if (elements.btnDaysSelectAll) {
         elements.btnDaysSelectAll.addEventListener('click', () => {
             setAllDayFilters(true);

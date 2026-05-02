@@ -195,7 +195,8 @@ body {
 
 .control-block select,
 .control-block input[type="text"],
-.control-block input[type="search"] {
+.control-block input[type="search"],
+.control-block input[type="date"] {
     height: 38px;
     border: 1px solid var(--border);
     border-radius: 10px;

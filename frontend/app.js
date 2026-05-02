@@ -27,6 +27,7 @@ const state = {
     shiftQuery: '',
     shiftQueries: [],
     searchQuery: '',
+    currentHistorySavedAt: '',
     currentUser: (() => {
         try {
             return localStorage.getItem('currentUser') || '';
@@ -789,6 +790,18 @@ async function loadHistorySelection() {
         state.historyData = Array.isArray(rows) ? rows : [];
         normalizeLaborRowsPayType(state.historyData);
         state.currentHistoryId = id;
+        
+        // Find saved_at from history select
+        if (elements.historySelect) {
+            const opt = Array.from(elements.historySelect.options).find(o => o.value === id);
+            if (opt) {
+                const ts = opt.textContent.split(' #')[0];
+                if (ts && ts.includes('-')) {
+                    state.currentHistorySavedAt = ts;
+                }
+            }
+        }
+
         populateCompanyFilter();
         renderTable();
     } catch (err) {
@@ -800,6 +813,8 @@ async function loadHistorySelection() {
 function clearHistoryView() {
     state.historyData = null;
     state.currentHistoryId = '';
+    state.currentHistorySavedAt = '';
+
     if (elements.historySelect) elements.historySelect.value = '';
     populateCompanyFilter();
     renderTable();
@@ -1484,6 +1499,22 @@ function renderTable() {
     });
 
     const days = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日'];
+    
+    function getWeekDates(baseDate = new Date()) {
+        const d = new Date(baseDate);
+        const day = d.getDay();
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1); 
+        const monday = new Date(d.setDate(diff));
+        return Array.from({length: 7}, (_, i) => {
+            const date = new Date(monday);
+            date.setDate(monday.getDate() + i);
+            return (date.getMonth() + 1) + '/' + date.getDate();
+        });
+    }
+
+    const baseDate = state.currentHistorySavedAt ? new Date(state.currentHistorySavedAt) : new Date();
+    const weekDates = getWeekDates(baseDate);
+
 
     let currentGroupKey = null;
     let groupIdx = -1;
@@ -1655,9 +1686,10 @@ function renderTable() {
         <thead>
             <tr>
                 <th>公司</th><th>班次</th><th>计薪类型</th><th>岗位内容</th>
-                ${days.map(d => `
+                ${days.map((d, i) => `
                     <th data-day-col="${d}">
                         <div class="day-header">
+                            <span class="day-date">${weekDates[i]}</span>
                             <span class="day-title">${d}</span>
                             <div class="day-subheads">
                                 <span>计划</span>
@@ -1739,6 +1771,20 @@ function exportCurrentView() {
         return;
     }
 
+    function getWeekDates(baseDate = new Date()) {
+        const d = new Date(baseDate);
+        const day = d.getDay();
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1); 
+        const monday = new Date(d.setDate(diff));
+        return Array.from({length: 7}, (_, i) => {
+            const date = new Date(monday);
+            date.setDate(monday.getDate() + i);
+            return (date.getMonth() + 1) + '/' + date.getDate();
+        });
+    }
+    const baseDate = state.currentHistorySavedAt ? new Date(state.currentHistorySavedAt) : new Date();
+    const weekDates = getWeekDates(baseDate);
+
     const rows = filteredData.map(row => {
         const exportRow = {
             公司: row['劳务公司/归属'] || '',
@@ -1749,8 +1795,10 @@ function exportCurrentView() {
             变化原因: getChangeReason(row)
         };
         exportDays.forEach(day => {
-            exportRow[`${day}_计划`] = getDisplayDayValue(row, day, 'plan');
-            exportRow[`${day}_实到`] = getDisplayDayValue(row, day, 'actual');
+            const dayIdx = days.indexOf(day);
+            const dateStr = dayIdx !== -1 ? ` (${weekDates[dayIdx]})` : '';
+            exportRow[`${day}${dateStr}_计划`] = getDisplayDayValue(row, day, 'plan');
+            exportRow[`${day}${dateStr}_实到`] = getDisplayDayValue(row, day, 'actual');
         });
         return exportRow;
     });

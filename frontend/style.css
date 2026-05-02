@@ -439,13 +439,21 @@ body {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 0;
+    gap: 2px;
+    padding: 4px 0;
+}
+
+.day-date {
+    font-size: 10px;
+    color: #64748b;
+    font-weight: 500;
+    line-height: 1;
 }
 
 .day-title {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 800;
-    color: #334155;
+    color: #1e293b;
 }
 
 /* 日期列：计划与实到中缝不留空 — 两栏等宽拉满控件 */

@@ -35,86 +35,133 @@
             <div class="daily-ops-header">
                 <div class="daily-ops-heading">
                     <h2 class="daily-ops-title">当日换算 · 本周核对</h2>
-                    <p class="daily-ops-desc"><strong>核对周</strong>与上方「周起始日期」（自动对齐为<strong>当周周一</strong>）及表格表头<strong>星期一～星期日</strong>的月日为同一自然周；每天排班填完后，在下方选择<strong>核对列</strong>对应的那一天即可核对。各卡中<strong>按劳务公司分行</strong>显示可编辑的组数（叉车为人数）；修改后写入该日计划列并需填写变化原因（同一公司多条岗位时合计写在<strong>首行</strong>）。<strong>Machine include warpping & cleaning</strong>（6 人/组）与 <strong>Dumping 侧</strong>（3 人/组，含 <strong>Dumping & cleaning</strong>、岗位含<strong>供包员</strong>或<strong>Sorting Machine</strong>或<strong>分拣机</strong>）按早班、晚班分别汇总；满组不一致时外圈高亮。</p>
                     <div class="daily-ops-toolbar">
                         <label class="daily-ops-day-label" for="daily-ops-day-select">核对列（本周）</label>
                         <select id="daily-ops-day-select" class="daily-ops-day-select" title="仅本表周内周一～周日，与表头列一致"></select>
                     </div>
                 </div>
-                <p class="daily-ops-meta" id="daily-ops-meta"></p>
             </div>
             <div class="daily-ops-grid">
                 <article class="daily-ops-card daily-ops-card-emphasis">
-                    <span class="daily-ops-label">人工分拣台-粗分 → 拣桌数</span>
-                    <span class="daily-ops-note">人数 ÷ 8（对应该岗位在核对列的计划人数）</span>
+                    <span class="daily-ops-label">人工分拣台-粗分 → 拣桌数<span class="daily-ops-shift-time-suffix" id="daily-ops-pick-shift-time"></span></span>
                     <div class="daily-ops-company-lines" id="daily-ops-pick-companies" aria-label="按公司：人工分拣台-粗分拣桌组数"></div>
-                    <span class="daily-ops-metric-key">拣桌换算</span>
                     <span class="daily-ops-value" id="daily-ops-pick-count">—</span>
                     <span class="daily-ops-provided-wrap">
                         <span class="daily-ops-provided-groups" id="daily-ops-pick-provided-groups"></span>
                     </span>
                 </article>
-                <article class="daily-ops-card">
-                    <span class="daily-ops-label">叉车司机（早班）</span>
-                    <span class="daily-ops-note">计划人数（表格列）</span>
-                    <div class="daily-ops-company-lines" id="daily-ops-forklift-am-cos" aria-label="按公司叉车早班人数"></div>
-                    <span class="daily-ops-metric-key">人数合计</span>
-                    <span class="daily-ops-value" id="daily-ops-forklift-am">—</span>
-                    <span class="daily-ops-provided-wrap">
-                        <span class="daily-ops-provided-groups" id="daily-ops-forklift-am-provided-groups"></span>
-                    </span>
-                </article>
-                <article class="daily-ops-card">
-                    <span class="daily-ops-label">叉车司机（晚班）</span>
-                    <span class="daily-ops-note">计划人数（表格列）</span>
-                    <div class="daily-ops-company-lines" id="daily-ops-forklift-pm-cos" aria-label="按公司叉车晚班人数"></div>
-                    <span class="daily-ops-metric-key">人数合计</span>
-                    <span class="daily-ops-value" id="daily-ops-forklift-pm">—</span>
-                    <span class="daily-ops-provided-wrap">
-                        <span class="daily-ops-provided-groups" id="daily-ops-forklift-pm-provided-groups"></span>
-                    </span>
-                </article>
-                <div class="daily-ops-grid-full daily-ops-mach-dump-section" id="daily-ops-mach-dump-section">
-                    <div class="daily-ops-shift-block" id="daily-ops-shift-wrap-am">
-                        <div class="daily-ops-shift-heading">早班 · Machine / Dumping</div>
-                        <div class="daily-ops-shift-cards">
-                            <article class="daily-ops-card daily-ops-card-compact">
-                                <span class="daily-ops-label">Machine（6 人/组）</span>
-                                <span class="daily-ops-note" id="daily-ops-machine-am-note">—</span>
-                                <div class="daily-ops-company-lines" id="daily-ops-machine-am-cos"></div>
-                                <span class="daily-ops-metric-key">组数</span>
-                                <span class="daily-ops-value daily-ops-value-sm" id="daily-ops-machine-am-val">—</span>
-                                <span class="daily-ops-provided-groups" id="daily-ops-machine-am-provided-groups"></span>
-                            </article>
-                            <article class="daily-ops-card daily-ops-card-compact">
-                                <span class="daily-ops-label">Dumping 等（3 人/组）</span>
-                                <span class="daily-ops-note" id="daily-ops-dumping-am-note">—</span>
-                                <div class="daily-ops-company-lines" id="daily-ops-dumping-am-cos"></div>
-                                <span class="daily-ops-metric-key">组数</span>
-                                <span class="daily-ops-value daily-ops-value-sm" id="daily-ops-dumping-am-val">—</span>
-                                <span class="daily-ops-provided-groups" id="daily-ops-dumping-am-provided-groups"></span>
-                            </article>
+                <article class="daily-ops-card daily-ops-card-forklift">
+                    <span class="daily-ops-label">叉车司机</span>
+                    <div class="daily-ops-inout-shift daily-ops-forklift-shift">
+                        <span class="daily-ops-inout-shift-h">早班<span class="daily-ops-shift-time-suffix" id="daily-ops-forklift-am-h-time"></span></span>
+                        <div class="daily-ops-inout-line">
+                            <span class="daily-ops-inout-tag">06：00</span>
+                            <div class="daily-ops-company-lines" id="daily-ops-forklift-am6-cos" aria-label="按公司叉车早班6点人数"></div>
+                            <span class="daily-ops-metric-key">人数</span>
+                            <span class="daily-ops-value daily-ops-value-sm daily-ops-inout-value" id="daily-ops-forklift-am6-val">—</span>
+                            <span class="daily-ops-provided-groups" id="daily-ops-forklift-am6-provided-groups"></span>
+                        </div>
+                        <div class="daily-ops-inout-line">
+                            <span class="daily-ops-inout-tag">08：00</span>
+                            <div class="daily-ops-company-lines" id="daily-ops-forklift-am8-cos" aria-label="按公司叉车早班8点人数"></div>
+                            <span class="daily-ops-metric-key">人数</span>
+                            <span class="daily-ops-value daily-ops-value-sm daily-ops-inout-value" id="daily-ops-forklift-am8-val">—</span>
+                            <span class="daily-ops-provided-groups" id="daily-ops-forklift-am8-provided-groups"></span>
                         </div>
                     </div>
-                    <div class="daily-ops-shift-block" id="daily-ops-shift-wrap-pm">
-                        <div class="daily-ops-shift-heading">晚班 · Machine / Dumping</div>
-                        <div class="daily-ops-shift-cards">
-                            <article class="daily-ops-card daily-ops-card-compact">
-                                <span class="daily-ops-label">Machine（6 人/组）</span>
-                                <span class="daily-ops-note" id="daily-ops-machine-pm-note">—</span>
-                                <div class="daily-ops-company-lines" id="daily-ops-machine-pm-cos"></div>
-                                <span class="daily-ops-metric-key">组数</span>
-                                <span class="daily-ops-value daily-ops-value-sm" id="daily-ops-machine-pm-val">—</span>
-                                <span class="daily-ops-provided-groups" id="daily-ops-machine-pm-provided-groups"></span>
-                            </article>
-                            <article class="daily-ops-card daily-ops-card-compact">
-                                <span class="daily-ops-label">Dumping 等（3 人/组）</span>
-                                <span class="daily-ops-note" id="daily-ops-dumping-pm-note">—</span>
-                                <div class="daily-ops-company-lines" id="daily-ops-dumping-pm-cos"></div>
-                                <span class="daily-ops-metric-key">组数</span>
-                                <span class="daily-ops-value daily-ops-value-sm" id="daily-ops-dumping-pm-val">—</span>
-                                <span class="daily-ops-provided-groups" id="daily-ops-dumping-pm-provided-groups"></span>
-                            </article>
+                    <div class="daily-ops-inout-shift daily-ops-forklift-shift">
+                        <span class="daily-ops-inout-shift-h">晚班<span class="daily-ops-shift-time-suffix" id="daily-ops-forklift-pm-h-time"></span></span>
+                        <div class="daily-ops-inout-line">
+                            <span class="daily-ops-inout-tag">16：30</span>
+                            <div class="daily-ops-company-lines" id="daily-ops-forklift-pm1630-cos" aria-label="按公司叉车晚班16:30人数"></div>
+                            <span class="daily-ops-metric-key">人数</span>
+                            <span class="daily-ops-value daily-ops-value-sm daily-ops-inout-value" id="daily-ops-forklift-pm1630-val">—</span>
+                            <span class="daily-ops-provided-groups" id="daily-ops-forklift-pm1630-provided-groups"></span>
+                        </div>
+                    </div>
+                    <div class="daily-ops-inout-shift daily-ops-forklift-shift daily-ops-forklift-shift--other" id="daily-ops-forklift-other-section" hidden>
+                        <span class="daily-ops-inout-shift-h">其他<span class="daily-ops-shift-time-suffix" id="daily-ops-forklift-other-h-time"></span></span>
+                        <div class="daily-ops-inout-line">
+                            <span class="daily-ops-inout-tag">非 06：00 / 08：00 / 16：30 或无解析时刻</span>
+                            <div class="daily-ops-company-lines" id="daily-ops-forklift-other-cos" aria-label="按公司叉车其他时段人数"></div>
+                            <span class="daily-ops-metric-key">人数</span>
+                            <span class="daily-ops-value daily-ops-value-sm daily-ops-inout-value" id="daily-ops-forklift-other-val">—</span>
+                            <span class="daily-ops-provided-groups" id="daily-ops-forklift-other-provided-groups"></span>
+                        </div>
+                    </div>
+                </article>
+                <article class="daily-ops-card daily-ops-card-inout">
+                    <span class="daily-ops-label">出库 / 入库</span>
+                    <div class="daily-ops-inout-shift">
+                        <span class="daily-ops-inout-shift-h">早班<span class="daily-ops-shift-time-suffix" id="daily-ops-inout-am-h-time"></span></span>
+                        <div class="daily-ops-inout-line">
+                            <span class="daily-ops-inout-tag">出库</span>
+                            <div class="daily-ops-company-lines" id="daily-ops-out-am-cos"></div>
+                            <span class="daily-ops-metric-key">人数</span>
+                            <span class="daily-ops-value daily-ops-value-sm daily-ops-inout-value" id="daily-ops-out-am-val">—</span>
+                            <span class="daily-ops-provided-groups" id="daily-ops-out-am-provided-groups"></span>
+                        </div>
+                        <div class="daily-ops-inout-line">
+                            <span class="daily-ops-inout-tag">入库</span>
+                            <div class="daily-ops-company-lines" id="daily-ops-in-am-cos"></div>
+                            <span class="daily-ops-metric-key">人数</span>
+                            <span class="daily-ops-value daily-ops-value-sm daily-ops-inout-value" id="daily-ops-in-am-val">—</span>
+                            <span class="daily-ops-provided-groups" id="daily-ops-in-am-provided-groups"></span>
+                        </div>
+                    </div>
+                    <div class="daily-ops-inout-shift">
+                        <span class="daily-ops-inout-shift-h">晚班<span class="daily-ops-shift-time-suffix" id="daily-ops-inout-pm-h-time"></span></span>
+                        <div class="daily-ops-inout-line">
+                            <span class="daily-ops-inout-tag">出库</span>
+                            <div class="daily-ops-company-lines" id="daily-ops-out-pm-cos"></div>
+                            <span class="daily-ops-metric-key">人数</span>
+                            <span class="daily-ops-value daily-ops-value-sm daily-ops-inout-value" id="daily-ops-out-pm-val">—</span>
+                            <span class="daily-ops-provided-groups" id="daily-ops-out-pm-provided-groups"></span>
+                        </div>
+                        <div class="daily-ops-inout-line">
+                            <span class="daily-ops-inout-tag">入库</span>
+                            <div class="daily-ops-company-lines" id="daily-ops-in-pm-cos"></div>
+                            <span class="daily-ops-metric-key">人数</span>
+                            <span class="daily-ops-value daily-ops-value-sm daily-ops-inout-value" id="daily-ops-in-pm-val">—</span>
+                            <span class="daily-ops-provided-groups" id="daily-ops-in-pm-provided-groups"></span>
+                        </div>
+                    </div>
+                </article>
+                <div class="daily-ops-grid-full daily-ops-mach-dump-section" id="daily-ops-mach-dump-section">
+                    <div class="daily-ops-shift-block daily-ops-mach-dump-merged">
+                        <div class="daily-ops-mach-dump-stack" id="daily-ops-shift-wrap-am">
+                            <div class="daily-ops-shift-heading">早班 · Machine / Dumping<span class="daily-ops-shift-time-suffix" id="daily-ops-mach-heading-am-time"></span></div>
+                            <div class="daily-ops-shift-cards">
+                                <article class="daily-ops-card daily-ops-card-compact">
+                                    <span class="daily-ops-label">Sorting Machine/分拣机<span class="daily-ops-shift-time-suffix" id="daily-ops-machine-am-shift-time"></span></span>
+                                    <div class="daily-ops-company-lines" id="daily-ops-machine-am-cos"></div>
+                                    <span class="daily-ops-value daily-ops-value-sm" id="daily-ops-machine-am-val">—</span>
+                                    <span class="daily-ops-provided-groups" id="daily-ops-machine-am-provided-groups"></span>
+                                </article>
+                                <article class="daily-ops-card daily-ops-card-compact">
+                                    <span class="daily-ops-label">Dumping 等（3 人/组）<span class="daily-ops-shift-time-suffix" id="daily-ops-dumping-am-shift-time"></span></span>
+                                    <div class="daily-ops-company-lines" id="daily-ops-dumping-am-cos"></div>
+                                    <span class="daily-ops-value daily-ops-value-sm" id="daily-ops-dumping-am-val">—</span>
+                                    <span class="daily-ops-provided-groups" id="daily-ops-dumping-am-provided-groups"></span>
+                                </article>
+                            </div>
+                        </div>
+                        <div class="daily-ops-mach-dump-stack" id="daily-ops-shift-wrap-pm">
+                            <div class="daily-ops-shift-heading">晚班 · Machine / Dumping<span class="daily-ops-shift-time-suffix" id="daily-ops-mach-heading-pm-time"></span></div>
+                            <div class="daily-ops-shift-cards">
+                                <article class="daily-ops-card daily-ops-card-compact">
+                                    <span class="daily-ops-label">Sorting Machine/分拣机<span class="daily-ops-shift-time-suffix" id="daily-ops-machine-pm-shift-time"></span></span>
+                                    <div class="daily-ops-company-lines" id="daily-ops-machine-pm-cos"></div>
+                                    <span class="daily-ops-value daily-ops-value-sm" id="daily-ops-machine-pm-val">—</span>
+                                    <span class="daily-ops-provided-groups" id="daily-ops-machine-pm-provided-groups"></span>
+                                </article>
+                                <article class="daily-ops-card daily-ops-card-compact">
+                                    <span class="daily-ops-label">Dumping 等（3 人/组）<span class="daily-ops-shift-time-suffix" id="daily-ops-dumping-pm-shift-time"></span></span>
+                                    <div class="daily-ops-company-lines" id="daily-ops-dumping-pm-cos"></div>
+                                    <span class="daily-ops-value daily-ops-value-sm" id="daily-ops-dumping-pm-val">—</span>
+                                    <span class="daily-ops-provided-groups" id="daily-ops-dumping-pm-provided-groups"></span>
+                                </article>
+                            </div>
                         </div>
                     </div>
                 </div>

@@ -61,6 +61,21 @@ const DEFAULT_USERS = [{
     lockedUntil: 0
 }];
 
+let _scheduleJumpHighlightTimer = null;
+/** @type {HTMLTableRowElement | null} */
+let _scheduleJumpHighlightRow = null;
+
+function clearScheduleJumpHighlight() {
+    if (_scheduleJumpHighlightTimer !== null) {
+        clearTimeout(_scheduleJumpHighlightTimer);
+        _scheduleJumpHighlightTimer = null;
+    }
+    if (_scheduleJumpHighlightRow) {
+        _scheduleJumpHighlightRow.classList.remove('schedule-row-highlight');
+        _scheduleJumpHighlightRow = null;
+    }
+}
+
 const elements = {
     scheduleTable: document.getElementById('schedule-table'),
     loginAccountSet: document.getElementById('login-account-set'),
@@ -1508,6 +1523,31 @@ function shiftStartMinutesForSort(shiftText) {
     return null;
 }
 
+/** 叉车：班次名称中最早可解析的开始时刻（归一为 H:mm），无则 null（与排序用起始时刻一致） */
+function getForkliftPrimaryStartNorm(shiftText) {
+    const starts = extractShiftStartTimes(shiftText);
+    let best = null;
+    let bestM = null;
+    for (const t of starts) {
+        const n = normalizeTimeToken(t);
+        if (!/^\d{1,2}:\d{2}$/.test(n)) continue;
+        const m = timeStringToMinutes(n);
+        if (m === null) continue;
+        if (bestM === null || m < bestM) {
+            bestM = m;
+            best = n;
+        }
+    }
+    if (best !== null) return best;
+    const text = String(shiftText ?? '').replace(/：/g, ':');
+    const loose = text.match(/(\d{1,2}:\d{2}\s*(?:am|pm)?)/i);
+    if (loose) {
+        const n = normalizeTimeToken(loose[1]);
+        if (/^\d{1,2}:\d{2}$/.test(n)) return n;
+    }
+    return null;
+}
+
 /** 无明确时间时：用语义顺序从早到晚（数值越小越靠前） */
 function shiftSemanticTier(shiftText) {
     const shift = String(shiftText || '');
@@ -1543,14 +1583,22 @@ const ROLE_DUMPING_OPS = 'Dumping & cleaning';
 const ROLE_FORKLIFT_OPS = 'Forklift Driver';
 const ROLE_PICK_SORT_TABLE_OPS = '人工分拣台-粗分';
 
-/** 早晚班 Machine/Dumping 看板：Dumping 小卡汇总岗位（均为 3 人/组折合） */
+/** 早晚班 Machine 看板（6 人/组）：含固定岗位名及 Sorting Machine、分拣机 */
+function isDailyOpsMachineRoleRow(row) {
+    if (!row || typeof row !== 'object') return false;
+    const r = String(row['岗位/工作内容'] || '').trim();
+    if (r === ROLE_MACHINE_OPS) return true;
+    if (r.includes('Sorting Machine')) return true;
+    if (r.includes('分拣机')) return true;
+    return false;
+}
+
+/** 早晚班 Machine/Dumping 看板：Dumping 小卡汇总岗位（3 人/组）；Sorting Machine/分拣机计入 Machine */
 function isDailyOpsDumpingRoleRow(row) {
     if (!row || typeof row !== 'object') return false;
     const r = String(row['岗位/工作内容'] || '').trim();
     if (r === ROLE_DUMPING_OPS) return true;
     if (r.includes('供包员')) return true;
-    if (r.includes('Sorting Machine')) return true;
-    if (r.includes('分拣机')) return true;
     return false;
 }
 
@@ -1560,29 +1608,79 @@ function isDailyOpsPickRoughRow(row) {
     return String(row['岗位/工作内容'] || '').trim() === ROLE_PICK_SORT_TABLE_OPS;
 }
 
+/** 出库侧：岗位名称含「出库」 */
+function isDailyOpsOutboundRoleRow(row) {
+    if (!row || typeof row !== 'object') return false;
+    return String(row['岗位/工作内容'] || '').includes('出库');
+}
+
+/** 入库侧：岗位名称含「入库」 */
+function isDailyOpsInboundRoleRow(row) {
+    if (!row || typeof row !== 'object') return false;
+    return String(row['岗位/工作内容'] || '').includes('入库');
+}
+
+function isDailyOpsForkliftRoleRow(row) {
+    if (!row || typeof row !== 'object') return false;
+    return String(row['岗位/工作内容'] || '').trim() === ROLE_FORKLIFT_OPS;
+}
+
+/** 叉车司机固定时段：早班 6:00、8:00；晚班 16:30（与班次名称解析到的起始时刻精确对应） */
+const FORKLIFT_FIXED_START_MINUTES = {
+    am6: 6 * 60,
+    am8: 8 * 60,
+    pm1630: 16 * 60 + 30,
+};
+
+function forkliftRowStartMinutesOrNull(row) {
+    if (!isDailyOpsForkliftRoleRow(row)) return null;
+    const n = getForkliftPrimaryStartNorm(row['班次名称']);
+    if (!n) return null;
+    return timeStringToMinutes(n);
+}
+
+function isDailyOpsForkliftFixedMinutesRow(row, minutes) {
+    return forkliftRowStartMinutesOrNull(row) === minutes;
+}
+
+function isDailyOpsForkliftOtherFixedSlotRow(row) {
+    if (!isDailyOpsForkliftRoleRow(row)) return false;
+    const m = forkliftRowStartMinutesOrNull(row);
+    if (m === null) return true;
+    return (
+        m !== FORKLIFT_FIXED_START_MINUTES.am6 &&
+        m !== FORKLIFT_FIXED_START_MINUTES.am8 &&
+        m !== FORKLIFT_FIXED_START_MINUTES.pm1630
+    );
+}
+
 /** 当日换算看板：按行筛选类型，与 updateDailyOpsPanel 中条件一致 */
 function getDailyOpsPredicate(predKind) {
     switch (String(predKind || '')) {
         case 'rough':
             return (row) => isDailyOpsPickRoughRow(row);
-        case 'forkAm':
-            return (row) =>
-                String(row['岗位/工作内容'] || '').trim() === ROLE_FORKLIFT_OPS &&
-                !isLateShiftForOps(row['班次名称']);
-        case 'forkPm':
-            return (row) =>
-                String(row['岗位/工作内容'] || '').trim() === ROLE_FORKLIFT_OPS &&
-                isLateShiftForOps(row['班次名称']);
+        case 'forkAm6':
+            return (row) => isDailyOpsForkliftFixedMinutesRow(row, FORKLIFT_FIXED_START_MINUTES.am6);
+        case 'forkAm8':
+            return (row) => isDailyOpsForkliftFixedMinutesRow(row, FORKLIFT_FIXED_START_MINUTES.am8);
+        case 'forkPm1630':
+            return (row) => isDailyOpsForkliftFixedMinutesRow(row, FORKLIFT_FIXED_START_MINUTES.pm1630);
+        case 'forkOther':
+            return (row) => isDailyOpsForkliftOtherFixedSlotRow(row);
+        case 'outAm':
+            return (row) => isDailyOpsOutboundRoleRow(row) && !isLateShiftForOps(row['班次名称']);
+        case 'inAm':
+            return (row) => isDailyOpsInboundRoleRow(row) && !isLateShiftForOps(row['班次名称']);
+        case 'outPm':
+            return (row) => isDailyOpsOutboundRoleRow(row) && isLateShiftForOps(row['班次名称']);
+        case 'inPm':
+            return (row) => isDailyOpsInboundRoleRow(row) && isLateShiftForOps(row['班次名称']);
         case 'machAm':
-            return (row) =>
-                String(row['岗位/工作内容'] || '').trim() === ROLE_MACHINE_OPS &&
-                !isLateShiftForOps(row['班次名称']);
+            return (row) => isDailyOpsMachineRoleRow(row) && !isLateShiftForOps(row['班次名称']);
         case 'dumpAm':
             return (row) => isDailyOpsDumpingRoleRow(row) && !isLateShiftForOps(row['班次名称']);
         case 'machPm':
-            return (row) =>
-                String(row['岗位/工作内容'] || '').trim() === ROLE_MACHINE_OPS &&
-                isLateShiftForOps(row['班次名称']);
+            return (row) => isDailyOpsMachineRoleRow(row) && isLateShiftForOps(row['班次名称']);
         case 'dumpPm':
             return (row) => isDailyOpsDumpingRoleRow(row) && isLateShiftForOps(row['班次名称']);
         default:
@@ -1593,12 +1691,18 @@ function getDailyOpsPredicate(predKind) {
 function dailyOpsPredicateLabel(predKind) {
     const map = {
         rough: '人工分拣台-粗分→拣桌',
-        forkAm: '叉车早班',
-        forkPm: '叉车晚班',
-        machAm: 'Machine 早班',
-        dumpAm: 'Dumping/供包/分拣 早班',
-        machPm: 'Machine 晚班',
-        dumpPm: 'Dumping/供包/分拣 晚班',
+        forkAm6: '叉车 早班 06：00',
+        forkAm8: '叉车 早班 08：00',
+        forkPm1630: '叉车 晚班 16：30',
+        forkOther: '叉车 其他时段',
+        outAm: '出库早班',
+        inAm: '入库早班',
+        outPm: '出库晚班',
+        inPm: '入库晚班',
+        machAm: 'Sorting Machine/分拣机 早班',
+        dumpAm: 'Dumping/供包 早班',
+        machPm: 'Sorting Machine/分拣机 晚班',
+        dumpPm: 'Dumping/供包 晚班',
     };
     return map[predKind] || String(predKind);
 }
@@ -1688,6 +1792,122 @@ function populateCompanyFilter() {
     populateRoleDatalist();
 }
 
+/** 排班表：劳务公司首行锚点 id（与 focusScheduleCompanyInTable 一致） */
+function scheduleCompanyAnchorId(companyName) {
+    const s = String(companyName || '').trim();
+    if (!s) return 'schedule-co-empty';
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+    }
+    return `schedule-co-${(h >>> 0).toString(16)}`;
+}
+
+function findFirstScheduleRowForCompany(companyName) {
+    const want = String(companyName || '').trim();
+    if (!want || !elements.scheduleTable) return null;
+    const byId = document.getElementById(scheduleCompanyAnchorId(want));
+    if (byId) return byId;
+    const tbody = elements.scheduleTable.querySelector('tbody');
+    if (!tbody) return null;
+    const trs = tbody.querySelectorAll('tr.data-row');
+    for (let i = 0; i < trs.length; i++) {
+        const tag = trs[i].querySelector('.company-tag');
+        if (tag && String(tag.textContent || '').trim() === want) return trs[i];
+    }
+    return null;
+}
+
+/** 与主表 renderTable 中 sortedData 排序规则一致（同公司多条时为其中第一条） */
+function compareScheduleRowsForJumpOrder(a, b) {
+    const ma = shiftStartMinutesForSort(a['班次名称']);
+    const mb = shiftStartMinutesForSort(b['班次名称']);
+    if (ma !== null && mb !== null && ma !== mb) return ma - mb;
+    if (ma !== null && mb === null) return -1;
+    if (ma === null && mb !== null) return 1;
+    const ta = shiftSemanticTier(a['班次名称']);
+    const tb = shiftSemanticTier(b['班次名称']);
+    if (ta !== tb) return ta - tb;
+    const shiftCompare = sanitizeShiftName(a['班次名称']).localeCompare(sanitizeShiftName(b['班次名称']), 'zh-CN');
+    if (shiftCompare !== 0) return shiftCompare;
+    const payTypeA = normalizePayType(a['计薪类型']);
+    const payTypeB = normalizePayType(b['计薪类型']);
+    const payCmp = payTypeA.localeCompare(payTypeB, 'zh-CN');
+    if (payCmp !== 0) return payCmp;
+    const roleCmp = String(a['岗位/工作内容'] || '').localeCompare(String(b['岗位/工作内容'] || ''), 'zh-CN');
+    if (roleCmp !== 0) return roleCmp;
+    return String(a._rowUid || '').localeCompare(String(b._rowUid || ''), 'zh-CN');
+}
+
+/** 当日运算卡片中某公司在本指标下的数据行：取排序后的首行用于定位到具体班次/岗位 */
+function pickPrimaryDailyOpsJumpRow(rows) {
+    const list = (rows || []).filter((r) => r && typeof r === 'object' && String(r._rowUid || '').trim());
+    if (!list.length) return null;
+    return list.slice().sort(compareScheduleRowsForJumpOrder)[0];
+}
+
+function findScheduleRowByUid(rowUid) {
+    const uid = String(rowUid || '').trim();
+    if (!uid || !elements.scheduleTable) return null;
+    const tbody = elements.scheduleTable.querySelector('tbody');
+    if (!tbody) return null;
+    const trs = tbody.querySelectorAll('tr.data-row');
+    for (let i = 0; i < trs.length; i++) {
+        if (String(trs[i].getAttribute('data-row-uid') || '').trim() === uid) return trs[i];
+    }
+    return null;
+}
+
+/** 与下拉选项对齐（选项值可能含首尾空格，与卡片 trim 后的公司名一致即可） */
+function syncCompanyFilterSelectAfterJump(trimmedName) {
+    const want = String(trimmedName || '').trim();
+    if (!elements.companyFilter || !want) return;
+    const sel = elements.companyFilter;
+    for (let i = 0; i < sel.options.length; i++) {
+        const v = sel.options[i].value;
+        if (v === 'ALL') continue;
+        if (String(v || '').trim() === want) {
+            sel.value = v;
+            state.currentCompany = v;
+            return;
+        }
+    }
+    state.currentCompany = want;
+    sel.value = want;
+}
+
+/** 从当日换算等位置跳转到主表：可选 rowUid 时定位到该行（班次/岗位），否则该公司首行 */
+function focusScheduleCompanyInTable(companyName, options = {}) {
+    const co = String(companyName || '').trim();
+    if (!co) return;
+    const wantUid = String(options.rowUid || '').trim();
+    const doScroll = () => {
+        let row = wantUid ? findScheduleRowByUid(wantUid) : null;
+        if (!row) row = findFirstScheduleRowForCompany(co);
+        if (!row) return;
+        clearScheduleJumpHighlight();
+        row.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+        row.classList.add('schedule-row-highlight');
+        _scheduleJumpHighlightRow = row;
+        _scheduleJumpHighlightTimer = window.setTimeout(() => {
+            _scheduleJumpHighlightTimer = null;
+            if (_scheduleJumpHighlightRow === row) {
+                row.classList.remove('schedule-row-highlight');
+                _scheduleJumpHighlightRow = null;
+            }
+        }, 10000);
+    };
+    const curTrim = String(state.currentCompany || '').trim();
+    if (state.currentCompany !== 'ALL' && curTrim !== co) {
+        syncCompanyFilterSelectAfterJump(co);
+        renderTable();
+        requestAnimationFrame(() => requestAnimationFrame(doScroll));
+        return;
+    }
+    doScroll();
+}
+
 function renderTable() {
     function escapeHtml(text) {
         return String(text ?? '')
@@ -1697,6 +1917,8 @@ function renderTable() {
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;');
     }
+
+    clearScheduleJumpHighlight();
 
     let html = '';
     if (elements.weekStartDate) {
@@ -1724,7 +1946,9 @@ function renderTable() {
         ensureLaborRowUids(state.data);
     }
     const filteredData = getActiveRows().filter(item => {
-        const matchCompany = state.currentCompany === 'ALL' || item['劳务公司/归属'] === state.currentCompany;
+        const matchCompany =
+            state.currentCompany === 'ALL' ||
+            String(item['劳务公司/归属'] || '').trim() === String(state.currentCompany || '').trim();
         const itemPayType = normalizePayType(item['计薪类型']);
         const matchPayType = state.currentPayType === 'ALL' || itemPayType === state.currentPayType;
         const matchShift = matchesShiftQuery(item);
@@ -1880,8 +2104,14 @@ function renderTable() {
             `;
         const payTypeClass = payType === '计件' ? 'pay-type-piece' : 'pay-type-hourly';
         const canShared = editableRow && canEditPayTypeAndNote();
+        const coTrim = String(company || '').trim();
+        const isFirstRowOfCompany =
+            index === 0 ||
+            String(sortedData[index - 1]['劳务公司/归属'] || '').trim() !== coTrim;
+        const rowAnchorAttr = isFirstRowOfCompany ? ` id="${scheduleCompanyAnchorId(coTrim)}"` : '';
+        const rowUidDataAttr = rowUid ? ` data-row-uid="${escapeHtml(rowUid)}"` : '';
         html += `
-            <tr class="data-row">
+            <tr class="data-row"${rowAnchorAttr}${rowUidDataAttr}>
                 <td><span class="company-tag ${companyColorClass}">${escapeHtml(company)}</span></td>
                 <td class="${shiftCellAlertClass}">
                     ${shiftCellContent}
@@ -1985,7 +2215,9 @@ function applyFilters() {
 
 function getFilteredData() {
     return getActiveRows().filter(item => {
-        const matchCompany = state.currentCompany === 'ALL' || item['劳务公司/归属'] === state.currentCompany;
+        const matchCompany =
+            state.currentCompany === 'ALL' ||
+            String(item['劳务公司/归属'] || '').trim() === String(state.currentCompany || '').trim();
         const itemPayType = normalizePayType(item['计薪类型']);
         const matchPayType = state.currentPayType === 'ALL' || itemPayType === state.currentPayType;
         const matchShift = matchesShiftQuery(item);
@@ -2226,17 +2458,19 @@ function getMondayOfWeekContainingYmd(ymd) {
     return new Date(d.getFullYear(), d.getMonth(), diff, 12, 0, 0, 0);
 }
 
-function formatShortMd(d) {
-    if (!d || Number.isNaN(d.getTime())) return '—';
-    return `${d.getMonth() + 1}/${d.getDate()}`;
-}
-
 function formatOpsDivideValue(total, divisor) {
     if (!divisor) return '0';
     const v = total / divisor;
     if (!Number.isFinite(v)) return '—';
     if (Math.abs(v - Math.round(v)) < 1e-9) return String(Math.round(v));
     return String(v.toFixed(3)).replace(/\.?0+$/, '');
+}
+
+/** 拣桌卡片主数字：人数÷8 的换算结果 + 单位「组」 */
+function formatPickDeskGroupsDisplay(roughPeopleTotal) {
+    const v = formatOpsDivideValue(roughPeopleTotal, 8);
+    if (v === '—') return '—';
+    return `${v} 组`;
 }
 
 function sumFilteredPlanForDay(rows, dayKey, predicate) {
@@ -2319,10 +2553,16 @@ function renderDailyOpsCompanyLines(container, rows, dayKey, predKind, mode) {
         .forEach(([co, entry]) => {
             const line = document.createElement('div');
             line.className = 'daily-ops-company-line';
-            const name = document.createElement('span');
-            name.className = 'daily-ops-company-name';
-            name.textContent = co;
-            line.appendChild(name);
+            const nameBtn = document.createElement('button');
+            nameBtn.type = 'button';
+            nameBtn.className = 'daily-ops-company-name daily-ops-company-jumpbtn';
+            nameBtn.textContent = co;
+            const jumpRow = pickPrimaryDailyOpsJumpRow(entry.rows);
+            const jumpUid = jumpRow ? String(jumpRow._rowUid || '').trim() : '';
+            nameBtn.title = jumpUid ? `在排班表中定位：${co}（本条卡片对应的班次/岗位）` : `在排班表中定位：${co}`;
+            nameBtn.setAttribute('aria-label', jumpUid ? `查看 ${co} 对应班次排班` : `查看 ${co} 排班`);
+            nameBtn.addEventListener('click', () => focusScheduleCompanyInTable(co, jumpUid ? { rowUid: jumpUid } : {}));
+            line.appendChild(nameBtn);
             const displayVal = getDailyOpsCompanyDisplayInputValue(entry, mode);
             if (editable) {
                 const inp = document.createElement('input');
@@ -2417,98 +2657,101 @@ function onDailyOpsCompanyGroupsChange(ev) {
     renderTable();
 }
 
-function pickProvSummaryLine(rows, dayKey, predicate, roughTotal) {
-    const matched = rows.filter((row) => row && typeof row === 'object' && predicate(row));
-    if (!matched.length) return '';
-    if (matched.every(rowNoteIndicatesGroupUnit)) {
-        return `合计：${roughTotal} 组（各司表列组数加总）`;
-    }
-    return `合计：${formatOpsDivideValue(roughTotal, 8)} 组（全司人数÷8）`;
-}
-
-/** 早/晚班各一栏：人数、满组；外圈块在组数不一致时高亮 */
+/** 早/晚班各一栏：人数、满组 */
 function applyDailyOpsMachDumpShift({
-    wrapEl,
     machinePeople,
     dumpingPeople,
-    machineNoteEl,
     machineValEl,
-    dumpingNoteEl,
     dumpingValEl,
     machineProvidedEl,
     dumpingProvidedEl,
 }) {
     const gM = Math.floor(machinePeople / 6);
     const gD = Math.floor(dumpingPeople / 3);
-    const rM = machinePeople % 6;
-    const rD = dumpingPeople % 3;
 
-    if (machineNoteEl) {
-        machineNoteEl.textContent =
-            machinePeople > 0 ? `${machinePeople} 人 · 余 ${rM} 人` : '计划 0 人';
-    }
-    if (dumpingNoteEl) {
-        dumpingNoteEl.textContent =
-            dumpingPeople > 0 ? `${dumpingPeople} 人 · 余 ${rD} 人` : '计划 0 人';
-    }
     if (machineValEl) machineValEl.textContent = `${gM} 组`;
     if (dumpingValEl) dumpingValEl.textContent = `${gD} 组`;
-    if (machineProvidedEl) {
-        machineProvidedEl.textContent =
-            machinePeople > 0 ? `合计满组：${gM} 组（全司人数÷6 向下取整）` : '';
-    }
-    if (dumpingProvidedEl) {
-        dumpingProvidedEl.textContent =
-            dumpingPeople > 0 ? `合计满组：${gD} 组（全司人数÷3 向下取整）` : '';
-    }
+    if (machineProvidedEl) machineProvidedEl.textContent = '';
+    if (dumpingProvidedEl) dumpingProvidedEl.textContent = '';
 
     const hasAny = machinePeople > 0 || dumpingPeople > 0;
     const mismatch = hasAny && gM !== gD;
 
-    if (wrapEl) {
-        wrapEl.classList.remove('daily-ops-shift-block--warn', 'daily-ops-shift-block--ok');
-        if (hasAny) {
-            wrapEl.classList.add(mismatch ? 'daily-ops-shift-block--warn' : 'daily-ops-shift-block--ok');
-        }
-    }
-
     return { hasAny, mismatch, gM, gD };
+}
+
+const _DAILY_OPS_SHIFT_TIME_EL_IDS = [
+    'daily-ops-pick-shift-time',
+    'daily-ops-forklift-am-h-time',
+    'daily-ops-forklift-pm-h-time',
+    'daily-ops-forklift-other-h-time',
+    'daily-ops-inout-am-h-time',
+    'daily-ops-inout-pm-h-time',
+    'daily-ops-mach-heading-am-time',
+    'daily-ops-mach-heading-pm-time',
+    'daily-ops-machine-am-shift-time',
+    'daily-ops-dumping-am-shift-time',
+    'daily-ops-machine-pm-shift-time',
+    'daily-ops-dumping-pm-shift-time',
+];
+
+function clearDailyOpsShiftTimeSuffixes() {
+    _DAILY_OPS_SHIFT_TIME_EL_IDS.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = '';
+    });
+}
+
+/** 从当前筛选结果、核对列有计划人数的行中解析班次名称里的起始时刻，用于卡片标题后展示 */
+function collectDailyOpsShiftTimeLabels(rows, dayKey, rowPredicate, maxTimes = 6) {
+    const labels = [];
+    const seen = new Set();
+    if (!Array.isArray(rows)) return labels;
+    rows.forEach((row) => {
+        if (!row || typeof row !== 'object') return;
+        if (!rowPredicate(row)) return;
+        if (dayKey && getDisplayDayValue(row, dayKey, 'plan') <= 0) return;
+        const name = String(row['班次名称'] || '').trim();
+        if (!name) return;
+        extractShiftStartTimes(name).forEach((t) => {
+            const norm = normalizeTimeToken(t);
+            if (!/^\d{1,2}:\d{2}$/.test(norm)) return;
+            if (seen.has(norm)) return;
+            seen.add(norm);
+            labels.push({ norm, disp: formatDisplayTime(t) });
+        });
+    });
+    labels.sort((a, b) => a.norm.localeCompare(b.norm));
+    return labels.slice(0, maxTimes).map((x) => x.disp);
+}
+
+function formatDailyOpsShiftTimesSuffix(rows, dayKey, rowPredicate) {
+    const parts = collectDailyOpsShiftTimeLabels(rows, dayKey, rowPredicate);
+    if (!parts.length) return '';
+    return ` · ${parts.join('、')}`;
+}
+
+function setDailyOpsShiftTimeSuffix(elId, rows, dayKey, rowPredicate) {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    el.textContent = formatDailyOpsShiftTimesSuffix(rows, dayKey, rowPredicate);
 }
 
 function updateDailyOpsPanel(filteredRows) {
     syncDailyOpsDaySelect();
 
-    const metaEl = document.getElementById('daily-ops-meta');
     const pickEl = document.getElementById('daily-ops-pick-count');
-    const forkAmEl = document.getElementById('daily-ops-forklift-am');
-    const forkPmEl = document.getElementById('daily-ops-forklift-pm');
+    const forkAm6El = document.getElementById('daily-ops-forklift-am6-val');
+    const forkAm8El = document.getElementById('daily-ops-forklift-am8-val');
+    const forkPm1630El = document.getElementById('daily-ops-forklift-pm1630-val');
+    const forkOtherEl = document.getElementById('daily-ops-forklift-other-val');
+    const outAmEl = document.getElementById('daily-ops-out-am-val');
+    const inAmEl = document.getElementById('daily-ops-in-am-val');
+    const outPmEl = document.getElementById('daily-ops-out-pm-val');
+    const inPmEl = document.getElementById('daily-ops-in-pm-val');
     const sel = document.getElementById('daily-ops-day-select');
-    if (!metaEl) return;
 
     const dayKey = sel && sel.value && WEEK_DAYS.includes(sel.value) ? sel.value : null;
-
-    const labels = getWeekDatesFromBase(getScheduleWeekBaseDate());
-    const monSched = getMondayDateOfScheduleWeek();
-    const sunSched = new Date(monSched);
-    sunSched.setDate(monSched.getDate() + 6);
-    const metaParts = [];
-
-    const weekSpan = `核对周 ${formatShortMd(monSched)}～${formatShortMd(sunSched)}`;
-    const curWeekHint = isScheduleWeekCalendarCurrentWeek() ? ' · 即当前自然周（与今天同一周）' : '';
-    metaParts.push(weekSpan + curWeekHint);
-
-    const idx0 = dayKey ? WEEK_DAYS.indexOf(dayKey) : -1;
-    const cal0 = idx0 >= 0 ? labels[idx0] : '—';
-    metaParts.push(`核对列：${dayKey || '—'}（${cal0}）`);
-
-    const filterBits = [];
-    if (state.currentCompany !== 'ALL') filterBits.push(`公司=${state.currentCompany}`);
-    if (state.currentPayType !== 'ALL') filterBits.push(`计薪=${state.currentPayType}`);
-    if (state.shiftQueries.length || state.shiftQuery.trim()) filterBits.push('班次关键词');
-    if (state.searchQuery.trim()) filterBits.push('岗位关键词');
-    if (filterBits.length) metaParts.push(`与上方合计相同，已应用：${filterBits.join('，')}`);
-
-    metaEl.textContent = metaParts.join(' · ');
 
     const resetMachDumpShiftBlocks = () => {
         document.querySelectorAll('#daily-ops-panel .daily-ops-company-lines').forEach((el) => {
@@ -2517,28 +2760,32 @@ function updateDailyOpsPanel(filteredRows) {
         document.querySelectorAll('#daily-ops-panel .daily-ops-provided-groups').forEach((el) => {
             el.textContent = '';
         });
-        ['daily-ops-shift-wrap-am', 'daily-ops-shift-wrap-pm'].forEach((id) => {
-            const w = document.getElementById(id);
-            if (w) w.classList.remove('daily-ops-shift-block--warn', 'daily-ops-shift-block--ok');
-        });
         const ids = [
-            'daily-ops-machine-am-note', 'daily-ops-machine-am-val',
-            'daily-ops-dumping-am-note', 'daily-ops-dumping-am-val',
-            'daily-ops-machine-pm-note', 'daily-ops-machine-pm-val',
-            'daily-ops-dumping-pm-note', 'daily-ops-dumping-pm-val',
+            'daily-ops-machine-am-val',
+            'daily-ops-dumping-am-val',
+            'daily-ops-machine-pm-val',
+            'daily-ops-dumping-pm-val',
         ];
         ids.forEach((rid) => {
             const n = document.getElementById(rid);
             if (!n) return;
-            if (rid.includes('-note')) n.textContent = '—';
-            else n.textContent = '—';
+            n.textContent = '—';
         });
     };
 
     const setDash = () => {
+        clearDailyOpsShiftTimeSuffixes();
         if (pickEl) pickEl.textContent = '—';
-        if (forkAmEl) forkAmEl.textContent = '—';
-        if (forkPmEl) forkPmEl.textContent = '—';
+        if (forkAm6El) forkAm6El.textContent = '—';
+        if (forkAm8El) forkAm8El.textContent = '—';
+        if (forkPm1630El) forkPm1630El.textContent = '—';
+        if (forkOtherEl) forkOtherEl.textContent = '—';
+        const forkOtherSec = document.getElementById('daily-ops-forklift-other-section');
+        if (forkOtherSec) forkOtherSec.hidden = true;
+        if (outAmEl) outAmEl.textContent = '—';
+        if (inAmEl) inAmEl.textContent = '—';
+        if (outPmEl) outPmEl.textContent = '—';
+        if (inPmEl) inPmEl.textContent = '—';
         resetMachDumpShiftBlocks();
     };
 
@@ -2549,19 +2796,35 @@ function updateDailyOpsPanel(filteredRows) {
 
     const rough = sumFilteredPlanForDay(filteredRows, dayKey, (row) => isDailyOpsPickRoughRow(row));
 
-    const forkAm = sumFilteredPlanForDay(filteredRows, dayKey, (row) => {
-        const role = String(row['岗位/工作内容'] || '').trim();
-        return role === ROLE_FORKLIFT_OPS && !isLateShiftForOps(row['班次名称']);
-    });
+    const predForkAm6 = getDailyOpsPredicate('forkAm6');
+    const predForkAm8 = getDailyOpsPredicate('forkAm8');
+    const predForkPm1630 = getDailyOpsPredicate('forkPm1630');
+    const predForkOther = getDailyOpsPredicate('forkOther');
 
-    const forkPm = sumFilteredPlanForDay(filteredRows, dayKey, (row) => {
-        const role = String(row['岗位/工作内容'] || '').trim();
-        return role === ROLE_FORKLIFT_OPS && isLateShiftForOps(row['班次名称']);
+    const forkAm6 = sumFilteredPlanForDay(filteredRows, dayKey, predForkAm6);
+    const forkAm8 = sumFilteredPlanForDay(filteredRows, dayKey, predForkAm8);
+    const forkPm1630 = sumFilteredPlanForDay(filteredRows, dayKey, predForkPm1630);
+    const forkOther = sumFilteredPlanForDay(filteredRows, dayKey, predForkOther);
+    const forkOtherCompanyMap = buildDailyOpsCompanyMap(filteredRows, dayKey, predForkOther);
+    const showForkliftOtherSection = forkOther > 0 || forkOtherCompanyMap.size > 0;
+    const forkOtherSectionEl = document.getElementById('daily-ops-forklift-other-section');
+    if (forkOtherSectionEl) forkOtherSectionEl.hidden = !showForkliftOtherSection;
+
+    const outAm = sumFilteredPlanForDay(filteredRows, dayKey, (row) => {
+        return isDailyOpsOutboundRoleRow(row) && !isLateShiftForOps(row['班次名称']);
+    });
+    const inAm = sumFilteredPlanForDay(filteredRows, dayKey, (row) => {
+        return isDailyOpsInboundRoleRow(row) && !isLateShiftForOps(row['班次名称']);
+    });
+    const outPm = sumFilteredPlanForDay(filteredRows, dayKey, (row) => {
+        return isDailyOpsOutboundRoleRow(row) && isLateShiftForOps(row['班次名称']);
+    });
+    const inPm = sumFilteredPlanForDay(filteredRows, dayKey, (row) => {
+        return isDailyOpsInboundRoleRow(row) && isLateShiftForOps(row['班次名称']);
     });
 
     const machineAm = sumFilteredPlanForDay(filteredRows, dayKey, (row) => {
-        const role = String(row['岗位/工作内容'] || '').trim();
-        return role === ROLE_MACHINE_OPS && !isLateShiftForOps(row['班次名称']);
+        return isDailyOpsMachineRoleRow(row) && !isLateShiftForOps(row['班次名称']);
     });
 
     const dumpingAm = sumFilteredPlanForDay(filteredRows, dayKey, (row) => {
@@ -2569,26 +2832,98 @@ function updateDailyOpsPanel(filteredRows) {
     });
 
     const machinePm = sumFilteredPlanForDay(filteredRows, dayKey, (row) => {
-        const role = String(row['岗位/工作内容'] || '').trim();
-        return role === ROLE_MACHINE_OPS && isLateShiftForOps(row['班次名称']);
+        return isDailyOpsMachineRoleRow(row) && isLateShiftForOps(row['班次名称']);
     });
 
     const dumpingPm = sumFilteredPlanForDay(filteredRows, dayKey, (row) => {
         return isDailyOpsDumpingRoleRow(row) && isLateShiftForOps(row['班次名称']);
     });
 
-    if (pickEl) pickEl.textContent = formatOpsDivideValue(rough, 8);
-    if (forkAmEl) forkAmEl.textContent = String(forkAm);
-    if (forkPmEl) forkPmEl.textContent = String(forkPm);
+    if (pickEl) pickEl.textContent = formatPickDeskGroupsDisplay(rough);
+    if (forkAm6El) forkAm6El.textContent = String(forkAm6);
+    if (forkAm8El) forkAm8El.textContent = String(forkAm8);
+    if (forkPm1630El) forkPm1630El.textContent = String(forkPm1630);
+    if (forkOtherEl) forkOtherEl.textContent = showForkliftOtherSection ? String(forkOther) : '—';
+    if (outAmEl) outAmEl.textContent = String(outAm);
+    if (inAmEl) inAmEl.textContent = String(inAm);
+    if (outPmEl) outPmEl.textContent = String(outPm);
+    if (inPmEl) inPmEl.textContent = String(inPm);
 
-    const roughPred = (row) => isDailyOpsPickRoughRow(row);
+    const predOutAm = getDailyOpsPredicate('outAm');
+    const predInAm = getDailyOpsPredicate('inAm');
+    const predOutPm = getDailyOpsPredicate('outPm');
+    const predInPm = getDailyOpsPredicate('inPm');
+    const predMachAm = getDailyOpsPredicate('machAm');
+    const predDumpAm = getDailyOpsPredicate('dumpAm');
+    const predMachPm = getDailyOpsPredicate('machPm');
+    const predDumpPm = getDailyOpsPredicate('dumpPm');
+
+    setDailyOpsShiftTimeSuffix('daily-ops-pick-shift-time', filteredRows, dayKey, isDailyOpsPickRoughRow);
+    setDailyOpsShiftTimeSuffix(
+        'daily-ops-forklift-am-h-time',
+        filteredRows,
+        dayKey,
+        (r) => isDailyOpsForkliftRoleRow(r) && !isLateShiftForOps(r['班次名称'])
+    );
+    setDailyOpsShiftTimeSuffix(
+        'daily-ops-forklift-pm-h-time',
+        filteredRows,
+        dayKey,
+        getDailyOpsPredicate('forkPm1630')
+    );
+    setDailyOpsShiftTimeSuffix('daily-ops-forklift-other-h-time', filteredRows, dayKey, getDailyOpsPredicate('forkOther'));
+    setDailyOpsShiftTimeSuffix(
+        'daily-ops-inout-am-h-time',
+        filteredRows,
+        dayKey,
+        (r) => predOutAm(r) || predInAm(r)
+    );
+    setDailyOpsShiftTimeSuffix(
+        'daily-ops-inout-pm-h-time',
+        filteredRows,
+        dayKey,
+        (r) => predOutPm(r) || predInPm(r)
+    );
+    setDailyOpsShiftTimeSuffix(
+        'daily-ops-mach-heading-am-time',
+        filteredRows,
+        dayKey,
+        (r) => predMachAm(r) || predDumpAm(r)
+    );
+    setDailyOpsShiftTimeSuffix(
+        'daily-ops-mach-heading-pm-time',
+        filteredRows,
+        dayKey,
+        (r) => predMachPm(r) || predDumpPm(r)
+    );
+    setDailyOpsShiftTimeSuffix('daily-ops-machine-am-shift-time', filteredRows, dayKey, predMachAm);
+    setDailyOpsShiftTimeSuffix('daily-ops-dumping-am-shift-time', filteredRows, dayKey, predDumpAm);
+    setDailyOpsShiftTimeSuffix('daily-ops-machine-pm-shift-time', filteredRows, dayKey, predMachPm);
+    setDailyOpsShiftTimeSuffix('daily-ops-dumping-pm-shift-time', filteredRows, dayKey, predDumpPm);
 
     const pickLinesEl = document.getElementById('daily-ops-pick-companies');
-    const forkAmLinesEl = document.getElementById('daily-ops-forklift-am-cos');
-    const forkPmLinesEl = document.getElementById('daily-ops-forklift-pm-cos');
+    const forkAm6LinesEl = document.getElementById('daily-ops-forklift-am6-cos');
+    const forkAm8LinesEl = document.getElementById('daily-ops-forklift-am8-cos');
+    const forkPm1630LinesEl = document.getElementById('daily-ops-forklift-pm1630-cos');
+    const forkOtherLinesEl = document.getElementById('daily-ops-forklift-other-cos');
     renderDailyOpsCompanyLines(pickLinesEl, filteredRows, dayKey, 'rough', 'rough');
-    renderDailyOpsCompanyLines(forkAmLinesEl, filteredRows, dayKey, 'forkAm', 'fork');
-    renderDailyOpsCompanyLines(forkPmLinesEl, filteredRows, dayKey, 'forkPm', 'fork');
+    renderDailyOpsCompanyLines(forkAm6LinesEl, filteredRows, dayKey, 'forkAm6', 'fork');
+    renderDailyOpsCompanyLines(forkAm8LinesEl, filteredRows, dayKey, 'forkAm8', 'fork');
+    renderDailyOpsCompanyLines(forkPm1630LinesEl, filteredRows, dayKey, 'forkPm1630', 'fork');
+    if (showForkliftOtherSection) {
+        renderDailyOpsCompanyLines(forkOtherLinesEl, filteredRows, dayKey, 'forkOther', 'fork');
+    } else if (forkOtherLinesEl) {
+        forkOtherLinesEl.innerHTML = '';
+    }
+
+    const outAmLinesEl = document.getElementById('daily-ops-out-am-cos');
+    const inAmLinesEl = document.getElementById('daily-ops-in-am-cos');
+    const outPmLinesEl = document.getElementById('daily-ops-out-pm-cos');
+    const inPmLinesEl = document.getElementById('daily-ops-in-pm-cos');
+    renderDailyOpsCompanyLines(outAmLinesEl, filteredRows, dayKey, 'outAm', 'fork');
+    renderDailyOpsCompanyLines(inAmLinesEl, filteredRows, dayKey, 'inAm', 'fork');
+    renderDailyOpsCompanyLines(outPmLinesEl, filteredRows, dayKey, 'outPm', 'fork');
+    renderDailyOpsCompanyLines(inPmLinesEl, filteredRows, dayKey, 'inPm', 'fork');
 
     const machAmLines = document.getElementById('daily-ops-machine-am-cos');
     const dumpAmLines = document.getElementById('daily-ops-dumping-am-cos');
@@ -2600,31 +2935,45 @@ function updateDailyOpsPanel(filteredRows) {
     renderDailyOpsCompanyLines(dumpPmLines, filteredRows, dayKey, 'dumpPm', 'dump3');
 
     const pickProvEl = document.getElementById('daily-ops-pick-provided-groups');
-    const forkAmProvEl = document.getElementById('daily-ops-forklift-am-provided-groups');
-    const forkPmProvEl = document.getElementById('daily-ops-forklift-pm-provided-groups');
-    if (pickProvEl) pickProvEl.textContent = pickProvSummaryLine(filteredRows, dayKey, roughPred, rough);
-    if (forkAmProvEl) forkAmProvEl.textContent = forkAm > 0 ? `合计：${forkAm} 人（全司叉车早班）` : '';
-    if (forkPmProvEl) forkPmProvEl.textContent = forkPm > 0 ? `合计：${forkPm} 人（全司叉车晚班）` : '';
+    const forkAm6ProvEl = document.getElementById('daily-ops-forklift-am6-provided-groups');
+    const forkAm8ProvEl = document.getElementById('daily-ops-forklift-am8-provided-groups');
+    const forkPm1630ProvEl = document.getElementById('daily-ops-forklift-pm1630-provided-groups');
+    const forkOtherProvEl = document.getElementById('daily-ops-forklift-other-provided-groups');
+    if (pickProvEl) pickProvEl.textContent = '';
+    const forkProvLine = (el, n, label) => {
+        if (el) el.textContent = n > 0 ? `合计：${n} 人（${label}）` : '';
+    };
+    forkProvLine(forkAm6ProvEl, forkAm6, dailyOpsPredicateLabel('forkAm6'));
+    forkProvLine(forkAm8ProvEl, forkAm8, dailyOpsPredicateLabel('forkAm8'));
+    forkProvLine(forkPm1630ProvEl, forkPm1630, dailyOpsPredicateLabel('forkPm1630'));
+    if (forkOtherProvEl) {
+        forkOtherProvEl.textContent =
+            showForkliftOtherSection && forkOther > 0
+                ? `合计：${forkOther} 人（${dailyOpsPredicateLabel('forkOther')}）`
+                : '';
+    }
+    const outAmProvEl = document.getElementById('daily-ops-out-am-provided-groups');
+    const inAmProvEl = document.getElementById('daily-ops-in-am-provided-groups');
+    const outPmProvEl = document.getElementById('daily-ops-out-pm-provided-groups');
+    const inPmProvEl = document.getElementById('daily-ops-in-pm-provided-groups');
+    if (outAmProvEl) outAmProvEl.textContent = '';
+    if (inAmProvEl) inAmProvEl.textContent = '';
+    if (outPmProvEl) outPmProvEl.textContent = '';
+    if (inPmProvEl) inPmProvEl.textContent = '';
 
     applyDailyOpsMachDumpShift({
-        wrapEl: document.getElementById('daily-ops-shift-wrap-am'),
         machinePeople: machineAm,
         dumpingPeople: dumpingAm,
-        machineNoteEl: document.getElementById('daily-ops-machine-am-note'),
         machineValEl: document.getElementById('daily-ops-machine-am-val'),
-        dumpingNoteEl: document.getElementById('daily-ops-dumping-am-note'),
         dumpingValEl: document.getElementById('daily-ops-dumping-am-val'),
         machineProvidedEl: document.getElementById('daily-ops-machine-am-provided-groups'),
         dumpingProvidedEl: document.getElementById('daily-ops-dumping-am-provided-groups'),
     });
 
     applyDailyOpsMachDumpShift({
-        wrapEl: document.getElementById('daily-ops-shift-wrap-pm'),
         machinePeople: machinePm,
         dumpingPeople: dumpingPm,
-        machineNoteEl: document.getElementById('daily-ops-machine-pm-note'),
         machineValEl: document.getElementById('daily-ops-machine-pm-val'),
-        dumpingNoteEl: document.getElementById('daily-ops-dumping-pm-note'),
         dumpingValEl: document.getElementById('daily-ops-dumping-pm-val'),
         machineProvidedEl: document.getElementById('daily-ops-machine-pm-provided-groups'),
         dumpingProvidedEl: document.getElementById('daily-ops-dumping-pm-provided-groups'),

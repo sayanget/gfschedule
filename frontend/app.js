@@ -28,6 +28,10 @@ const state = {
     shiftQueries: [],
     searchQuery: '',
     weekStartDate: '',
+    /** 晚班核对卡片所选列：星期一…星期日 */
+    dailyOpsCheckDay: '',
+    /** 表头周周一的 ymd，用于切换自然周时重置核对日 */
+    dailyOpsWeekAnchorKey: '',
     currentHistorySavedAt: '',
     currentUser: (() => {
         try {
@@ -424,13 +428,8 @@ function init() {
     // Initialize Week Start Date
     if (elements.weekStartDate) {
         const now = new Date();
-        const day = now.getDay();
-        const diff = now.getDate() - day + (day === 0 ? -6 : 1);
-        const monday = new Date(now.setDate(diff));
-        const yyyy = monday.getFullYear();
-        const mm = String(monday.getMonth() + 1).padStart(2, '0');
-        const dd = String(monday.getDate()).padStart(2, '0');
-        state.weekStartDate = `${yyyy}-${mm}-${dd}`;
+        const loc = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0, 0);
+        state.weekStartDate = mondayYmdFromCalendarDate(loc);
         elements.weekStartDate.value = state.weekStartDate;
     }
 
@@ -837,6 +836,142 @@ function clearHistoryView() {
 }
 
 const WEEK_DAYS = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日'];
+
+/** 将 YYYY-MM-DD 解析为本地日历日当天 12:00，避免仅日期串被当作 UTC 午夜导致周几错位 */
+function parseYmdToLocalNoon(ymd) {
+    const s = String(ymd || '').trim();
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+    if (!m) return null;
+    const y = Number(m[1]);
+    const mo = Number(m[2]) - 1;
+    const da = Number(m[3]);
+    const d = new Date(y, mo, da, 12, 0, 0, 0);
+    return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** 本地自然周（周一至周日）的周一 12:00 */
+function getMondayLocalNoonFromDate(d) {
+    const x = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0, 0);
+    const day = x.getDay();
+    const delta = x.getDate() - day + (day === 0 ? -6 : 1);
+    x.setDate(delta);
+    return x;
+}
+
+/** 将所选日历日对齐到其所在自然周的周一（YYYY-MM-DD），与表头「星期一…星期日」为同一周 */
+function mondayYmdFromCalendarDate(anchor) {
+    let d = null;
+    if (typeof anchor === 'string') {
+        d = parseYmdToLocalNoon(anchor);
+    } else if (anchor instanceof Date && !Number.isNaN(anchor.getTime())) {
+        d = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate(), 12, 0, 0, 0);
+    }
+    if (!d) return '';
+    const mon = getMondayLocalNoonFromDate(d);
+    const y = mon.getFullYear();
+    const mo = String(mon.getMonth() + 1).padStart(2, '0');
+    const da = String(mon.getDate()).padStart(2, '0');
+    return `${y}-${mo}-${da}`;
+}
+
+function getScheduleWeekBaseDate() {
+    if (isViewingHistory() && state.currentHistorySavedAt) {
+        const raw = String(state.currentHistorySavedAt).trim();
+        const datePart = raw.split(/[\sT]/)[0];
+        const d = parseYmdToLocalNoon(datePart);
+        if (d) return d;
+        const legacy = new Date(raw.replace(/-/g, '/'));
+        if (!Number.isNaN(legacy.getTime())) {
+            return new Date(legacy.getFullYear(), legacy.getMonth(), legacy.getDate(), 12, 0, 0, 0);
+        }
+    }
+    if (state.weekStartDate) {
+        const d = parseYmdToLocalNoon(state.weekStartDate);
+        if (d) return d;
+    }
+    const t = new Date();
+    return new Date(t.getFullYear(), t.getMonth(), t.getDate(), 12, 0, 0, 0);
+}
+
+/** 与主表表头一致：由基准日得到周一至周日的「月/日」 */
+function getWeekDatesFromBase(baseDate) {
+    let ref = null;
+    if (baseDate instanceof Date && !Number.isNaN(baseDate.getTime())) {
+        ref = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), 12, 0, 0, 0);
+    } else if (typeof baseDate === 'string') {
+        ref = parseYmdToLocalNoon(baseDate);
+    }
+    if (!ref || Number.isNaN(ref.getTime())) {
+        const t = new Date();
+        ref = new Date(t.getFullYear(), t.getMonth(), t.getDate(), 12, 0, 0, 0);
+    }
+    const mon = getMondayLocalNoonFromDate(ref);
+    return Array.from({ length: 7 }, (_, i) => {
+        const date = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + i, 12, 0, 0, 0);
+        return `${date.getMonth() + 1}/${date.getDate()}`;
+    });
+}
+
+/** 与主表同一自然周的「周一」本地 noon */
+function getMondayDateOfScheduleWeek() {
+    const base = getScheduleWeekBaseDate();
+    if (!base || Number.isNaN(base.getTime())) return getCalendarMondayThisWeek();
+    return getMondayLocalNoonFromDate(base);
+}
+
+function getCalendarMondayThisWeek() {
+    const t = new Date();
+    const loc = new Date(t.getFullYear(), t.getMonth(), t.getDate(), 12, 0, 0, 0);
+    return getMondayLocalNoonFromDate(loc);
+}
+
+function ymdFromLocalDate(d) {
+    const y = d.getFullYear();
+    const mo = String(d.getMonth() + 1).padStart(2, '0');
+    const da = String(d.getDate()).padStart(2, '0');
+    return `${y}-${mo}-${da}`;
+}
+
+function isScheduleWeekCalendarCurrentWeek() {
+    return getMondayDateOfScheduleWeek().getTime() === getCalendarMondayThisWeek().getTime();
+}
+
+let _dailyOpsDaySelectBound = false;
+
+function syncDailyOpsDaySelect() {
+    const sel = document.getElementById('daily-ops-day-select');
+    if (!sel) return;
+    const monSched = getMondayDateOfScheduleWeek();
+    const anchorKey = ymdFromLocalDate(monSched);
+    if (state.dailyOpsWeekAnchorKey !== anchorKey) {
+        state.dailyOpsWeekAnchorKey = anchorKey;
+        state.dailyOpsCheckDay = '';
+    }
+    const labels = getWeekDatesFromBase(getScheduleWeekBaseDate());
+    sel.innerHTML = WEEK_DAYS.map((wk, i) => `<option value="${wk}">${wk}（${labels[i]}）</option>`).join('');
+    const keep = state.dailyOpsCheckDay && WEEK_DAYS.includes(state.dailyOpsCheckDay) ? state.dailyOpsCheckDay : '';
+    if (keep) {
+        sel.value = keep;
+        state.dailyOpsCheckDay = keep;
+    } else {
+        const today = new Date();
+        today.setHours(12, 0, 0, 0);
+        let pick = WEEK_DAYS[0];
+        if (isScheduleWeekCalendarCurrentWeek()) {
+            const diffDays = Math.round((today.getTime() - monSched.getTime()) / 86400000);
+            if (diffDays >= 0 && diffDays <= 6) pick = WEEK_DAYS[diffDays];
+        }
+        sel.value = pick;
+        state.dailyOpsCheckDay = pick;
+    }
+    if (!_dailyOpsDaySelectBound) {
+        _dailyOpsDaySelectBound = true;
+        sel.addEventListener('change', () => {
+            state.dailyOpsCheckDay = sel.value;
+            recalcTotal();
+        });
+    }
+}
 
 function createEmptyRecordRow(company, shift, role, note) {
     const row = {
@@ -1389,6 +1524,85 @@ function shiftSemanticTier(shiftText) {
     return 70;
 }
 
+/** 业务看板：晚班/午后段，与叉车拆分、Machine & Dumping 晚班汇总一致 */
+function isLateShiftForOps(shiftText) {
+    const s = sanitizeShiftName(shiftText);
+    const lower = s.toLowerCase();
+    if (lower.includes('night')) return true;
+    if (lower.includes('special')) return true;
+    if (s.includes('晚') || s.includes('夜')) return true;
+    const tier = shiftSemanticTier(shiftText);
+    if (tier >= 35 && tier <= 46) return true;
+    const start = shiftStartMinutesForSort(s);
+    if (start !== null && start >= 15 * 60) return true;
+    return false;
+}
+
+const ROLE_MACHINE_OPS = 'Machine include warpping & cleaning';
+const ROLE_DUMPING_OPS = 'Dumping & cleaning';
+const ROLE_FORKLIFT_OPS = 'Forklift Driver';
+const ROLE_PICK_SORT_TABLE_OPS = '人工分拣台-粗分';
+
+/** 早晚班 Machine/Dumping 看板：Dumping 小卡汇总岗位（均为 3 人/组折合） */
+function isDailyOpsDumpingRoleRow(row) {
+    if (!row || typeof row !== 'object') return false;
+    const r = String(row['岗位/工作内容'] || '').trim();
+    if (r === ROLE_DUMPING_OPS) return true;
+    if (r.includes('供包员')) return true;
+    if (r.includes('Sorting Machine')) return true;
+    if (r.includes('分拣机')) return true;
+    return false;
+}
+
+/** 拣桌换算：岗位为「人工分拣台-粗分」的计划人数列 */
+function isDailyOpsPickRoughRow(row) {
+    if (!row || typeof row !== 'object') return false;
+    return String(row['岗位/工作内容'] || '').trim() === ROLE_PICK_SORT_TABLE_OPS;
+}
+
+/** 当日换算看板：按行筛选类型，与 updateDailyOpsPanel 中条件一致 */
+function getDailyOpsPredicate(predKind) {
+    switch (String(predKind || '')) {
+        case 'rough':
+            return (row) => isDailyOpsPickRoughRow(row);
+        case 'forkAm':
+            return (row) =>
+                String(row['岗位/工作内容'] || '').trim() === ROLE_FORKLIFT_OPS &&
+                !isLateShiftForOps(row['班次名称']);
+        case 'forkPm':
+            return (row) =>
+                String(row['岗位/工作内容'] || '').trim() === ROLE_FORKLIFT_OPS &&
+                isLateShiftForOps(row['班次名称']);
+        case 'machAm':
+            return (row) =>
+                String(row['岗位/工作内容'] || '').trim() === ROLE_MACHINE_OPS &&
+                !isLateShiftForOps(row['班次名称']);
+        case 'dumpAm':
+            return (row) => isDailyOpsDumpingRoleRow(row) && !isLateShiftForOps(row['班次名称']);
+        case 'machPm':
+            return (row) =>
+                String(row['岗位/工作内容'] || '').trim() === ROLE_MACHINE_OPS &&
+                isLateShiftForOps(row['班次名称']);
+        case 'dumpPm':
+            return (row) => isDailyOpsDumpingRoleRow(row) && isLateShiftForOps(row['班次名称']);
+        default:
+            return () => false;
+    }
+}
+
+function dailyOpsPredicateLabel(predKind) {
+    const map = {
+        rough: '人工分拣台-粗分→拣桌',
+        forkAm: '叉车早班',
+        forkPm: '叉车晚班',
+        machAm: 'Machine 早班',
+        dumpAm: 'Dumping/供包/分拣 早班',
+        machPm: 'Machine 晚班',
+        dumpPm: 'Dumping/供包/分拣 晚班',
+    };
+    return map[predKind] || String(predKind);
+}
+
 function populateShiftDatalist() {
     const dl = document.getElementById('shift-options-list');
     if (!dl) return;
@@ -1488,12 +1702,21 @@ function renderTable() {
     if (elements.weekStartDate) {
         elements.weekStartDate.disabled = isViewingHistory();
         if (isViewingHistory() && state.currentHistorySavedAt) {
-            const d = new Date(state.currentHistorySavedAt.replace(/-/g, '/')); // Handle potential Safari issues
-            const yyyy = d.getFullYear();
-            const mm = String(d.getMonth() + 1).padStart(2, '0');
-            const dd = String(d.getDate()).padStart(2, '0');
-            elements.weekStartDate.value = `${yyyy}-${mm}-${dd}`;
+            const raw = String(state.currentHistorySavedAt).trim();
+            const datePart = raw.split(/[\sT]/)[0];
+            let mon = mondayYmdFromCalendarDate(datePart);
+            if (!mon) {
+                const legacy = new Date(raw.replace(/-/g, '/'));
+                if (!Number.isNaN(legacy.getTime())) {
+                    mon = mondayYmdFromCalendarDate(
+                        new Date(legacy.getFullYear(), legacy.getMonth(), legacy.getDate(), 12, 0, 0, 0)
+                    );
+                }
+            }
+            if (mon) elements.weekStartDate.value = mon;
         } else if (!isViewingHistory()) {
+            const mon = state.weekStartDate ? mondayYmdFromCalendarDate(state.weekStartDate) : '';
+            if (mon) state.weekStartDate = mon;
             elements.weekStartDate.value = state.weekStartDate;
         }
     }
@@ -1527,24 +1750,9 @@ function renderTable() {
     });
 
     const days = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日'];
-    
-    function getWeekDates(baseDate = new Date()) {
-        const d = new Date(baseDate);
-        const day = d.getDay();
-        const diff = d.getDate() - day + (day === 0 ? -6 : 1); 
-        const monday = new Date(d.setDate(diff));
-        return Array.from({length: 7}, (_, i) => {
-            const date = new Date(monday);
-            date.setDate(monday.getDate() + i);
-            return (date.getMonth() + 1) + '/' + date.getDate();
-        });
-    }
 
-    const baseDate = state.currentHistorySavedAt 
-        ? new Date(state.currentHistorySavedAt) 
-        : (state.weekStartDate ? new Date(state.weekStartDate) : new Date());
-    const weekDates = getWeekDates(baseDate);
-
+    const baseDate = getScheduleWeekBaseDate();
+    const weekDates = getWeekDatesFromBase(baseDate);
 
     let currentGroupKey = null;
     let groupIdx = -1;
@@ -1801,21 +2009,8 @@ function exportCurrentView() {
         return;
     }
 
-    function getWeekDates(baseDate = new Date()) {
-        const d = new Date(baseDate);
-        const day = d.getDay();
-        const diff = d.getDate() - day + (day === 0 ? -6 : 1); 
-        const monday = new Date(d.setDate(diff));
-        return Array.from({length: 7}, (_, i) => {
-            const date = new Date(monday);
-            date.setDate(monday.getDate() + i);
-            return (date.getMonth() + 1) + '/' + date.getDate();
-        });
-    }
-    const baseDate = state.currentHistorySavedAt 
-        ? new Date(state.currentHistorySavedAt) 
-        : (state.weekStartDate ? new Date(state.weekStartDate) : new Date());
-    const weekDates = getWeekDates(baseDate);
+    const baseDate = getScheduleWeekBaseDate();
+    const weekDates = getWeekDatesFromBase(baseDate);
 
     const rows = filteredData.map(row => {
         const exportRow = {
@@ -2017,6 +2212,424 @@ function recalcTotal() {
     if (diffLabel) diffLabel.textContent = shiftOn ? '差异（当前班次）' : '差异';
 
     updateShiftHeadcountBanner(filteredRows, totalActual, checkedDays);
+    updateDailyOpsPanel(filteredRows);
+}
+
+function getMondayOfWeekContainingYmd(ymd) {
+    if (!ymd) return null;
+    const parts = String(ymd).trim().split('-').map((x) => Number(x));
+    if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
+    const d = new Date(parts[0], parts[1] - 1, parts[2], 12, 0, 0, 0);
+    if (Number.isNaN(d.getTime())) return null;
+    const day = d.getDay();
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+    return new Date(d.getFullYear(), d.getMonth(), diff, 12, 0, 0, 0);
+}
+
+function formatShortMd(d) {
+    if (!d || Number.isNaN(d.getTime())) return '—';
+    return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+function formatOpsDivideValue(total, divisor) {
+    if (!divisor) return '0';
+    const v = total / divisor;
+    if (!Number.isFinite(v)) return '—';
+    if (Math.abs(v - Math.round(v)) < 1e-9) return String(Math.round(v));
+    return String(v.toFixed(3)).replace(/\.?0+$/, '');
+}
+
+function sumFilteredPlanForDay(rows, dayKey, predicate) {
+    let s = 0;
+    rows.forEach((row) => {
+        if (!row || typeof row !== 'object') return;
+        if (!predicate(row)) return;
+        s += getDisplayDayValue(row, dayKey, 'plan');
+    });
+    return s;
+}
+
+function rowNoteIndicatesGroupUnit(row) {
+    const t = String(getRowNote(row) || '');
+    return t.includes('组');
+}
+
+function buildDailyOpsCompanyMap(rows, dayKey, predicate) {
+    const m = new Map();
+    rows.forEach((row) => {
+        if (!row || typeof row !== 'object') return;
+        if (!predicate(row)) return;
+        const c = String(row['劳务公司/归属'] || '').trim();
+        if (!c) return;
+        if (!m.has(c)) m.set(c, { people: 0, rows: [] });
+        const o = m.get(c);
+        o.people += getDisplayDayValue(row, dayKey, 'plan');
+        o.rows.push(row);
+    });
+    return m;
+}
+
+function getDailyOpsCompanyDisplayInputValue(entry, mode) {
+    const { people, rows } = entry;
+    if (mode === 'rough') {
+        if (rows.length && rows.every(rowNoteIndicatesGroupUnit)) {
+            return String(Math.max(0, Math.round(people)));
+        }
+        if (people <= 0) return '0';
+        const v = people / 8;
+        if (Math.abs(v - Math.round(v)) < 1e-9) return String(Math.round(v));
+        return String(Number(v.toFixed(4)));
+    }
+    if (mode === 'fork') return String(Math.max(0, Math.round(people)));
+    if (mode === 'machine6') return String(Math.floor(people / 6));
+    if (mode === 'dump3') return String(Math.floor(people / 3));
+    return '0';
+}
+
+function parseDailyOpsInputToPlanTotal(mode, rowsForCompany, rawStr) {
+    const g = parseFloat(String(rawStr ?? '').replace(/,/g, '').trim());
+    const n = Number.isFinite(g) ? g : 0;
+    if (mode === 'fork') return Math.max(0, Math.round(n));
+    if (mode === 'machine6') return Math.max(0, Math.round(n)) * 6;
+    if (mode === 'dump3') return Math.max(0, Math.round(n)) * 3;
+    if (mode === 'rough') {
+        const allGroup = rowsForCompany.length && rowsForCompany.every(rowNoteIndicatesGroupUnit);
+        if (allGroup) return Math.max(0, Math.round(n));
+        return Math.max(0, Math.round(n * 8));
+    }
+    return 0;
+}
+
+function renderDailyOpsCompanyLines(container, rows, dayKey, predKind, mode) {
+    if (!container) return;
+    container.innerHTML = '';
+    const predicate = getDailyOpsPredicate(predKind);
+    const map = buildDailyOpsCompanyMap(rows, dayKey, predicate);
+    if (!map.size) {
+        const empty = document.createElement('div');
+        empty.className = 'daily-ops-company-lines-empty';
+        empty.textContent = '（无劳务公司数据）';
+        container.appendChild(empty);
+        return;
+    }
+    const editable = canEditPlan() && !isViewingHistory();
+    const unitLabel = mode === 'fork' ? '人' : '组';
+    [...map.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0], 'zh-CN'))
+        .forEach(([co, entry]) => {
+            const line = document.createElement('div');
+            line.className = 'daily-ops-company-line';
+            const name = document.createElement('span');
+            name.className = 'daily-ops-company-name';
+            name.textContent = co;
+            line.appendChild(name);
+            const displayVal = getDailyOpsCompanyDisplayInputValue(entry, mode);
+            if (editable) {
+                const inp = document.createElement('input');
+                inp.type = 'number';
+                inp.className = 'daily-ops-company-groups-input';
+                inp.min = '0';
+                const roughPeopleMode =
+                    mode === 'rough' && !(entry.rows.length && entry.rows.every(rowNoteIndicatesGroupUnit));
+                inp.step = roughPeopleMode ? 'any' : '1';
+                inp.value = displayVal;
+                inp.dataset.dopsPred = predKind;
+                inp.dataset.dopsMode = mode;
+                inp.dataset.dopsCompany = co;
+                inp.dataset.lastCommitted = displayVal;
+                inp.title = `写入「${dayKey}」计划列；同一公司多条班次时合计记首行`;
+                inp.setAttribute('aria-label', `${co} ${unitLabel}数`);
+                line.appendChild(inp);
+            } else {
+                const ro = document.createElement('span');
+                ro.className = 'daily-ops-company-readonly';
+                ro.textContent = `${displayVal} ${unitLabel}`;
+                line.appendChild(ro);
+            }
+            const unit = document.createElement('span');
+            unit.className = 'daily-ops-company-unit';
+            unit.textContent = unitLabel;
+            line.appendChild(unit);
+            container.appendChild(line);
+        });
+}
+
+function onDailyOpsCompanyGroupsChange(ev) {
+    const el = ev.target;
+    if (!(el instanceof HTMLInputElement) || !el.classList.contains('daily-ops-company-groups-input')) return;
+    if (!canEditPlan()) {
+        renderTable();
+        return;
+    }
+    const sel = document.getElementById('daily-ops-day-select');
+    const dayKey = sel && WEEK_DAYS.includes(sel.value) ? sel.value : null;
+    if (!dayKey) {
+        renderTable();
+        return;
+    }
+    const company = String(el.dataset.dopsCompany || '').trim();
+    const predKind = String(el.dataset.dopsPred || '');
+    const mode = String(el.dataset.dopsMode || '');
+    const lastCommitted = String(el.dataset.lastCommitted ?? '');
+    if (!company || !predKind || !mode) return;
+    if (String(el.value) === lastCommitted) return;
+
+    const predicate = getDailyOpsPredicate(predKind);
+    const rows = getFilteredData();
+    const matches = rows.filter(
+        (r) => r && predicate(r) && String(r['劳务公司/归属'] || '').trim() === company
+    );
+    if (!matches.length) {
+        el.value = lastCommitted;
+        return;
+    }
+
+    const newTotal = parseDailyOpsInputToPlanTotal(mode, matches, el.value);
+    const oldSum = matches.reduce((s, r) => s + getDisplayDayValue(r, dayKey, 'plan'), 0);
+
+    if (newTotal === oldSum) {
+        el.dataset.lastCommitted = String(el.value);
+        return;
+    }
+
+    const ctxLabel = dailyOpsPredicateLabel(predKind);
+    const reason = window.prompt(
+        `请填写变化原因（${dayKey} ${ctxLabel} · ${company} 表列合计 ${oldSum}→${newTotal}）`
+    );
+    if (!reason || !reason.trim()) {
+        alert('未填写变化原因，本次修改已取消。');
+        el.value = lastCommitted;
+        return;
+    }
+    const rsn = reason.trim();
+    matches.sort((a, b) => String(a._rowUid || '').localeCompare(String(b._rowUid || '')));
+    const oldVals = matches.map((r) => getDisplayDayValue(r, dayKey, 'plan'));
+    matches.forEach((row, i) => {
+        const nv = i === 0 ? newTotal : 0;
+        const ov = oldVals[i];
+        if (ov !== nv) {
+            appendPlanChangeReason(row, dayKey, ov, nv, rsn);
+            setRawDayValueFromDisplay(row, dayKey, 'plan', nv);
+        }
+    });
+    el.dataset.lastCommitted = String(el.value);
+    enqueuePersistLaborToDb();
+    renderTable();
+}
+
+function pickProvSummaryLine(rows, dayKey, predicate, roughTotal) {
+    const matched = rows.filter((row) => row && typeof row === 'object' && predicate(row));
+    if (!matched.length) return '';
+    if (matched.every(rowNoteIndicatesGroupUnit)) {
+        return `合计：${roughTotal} 组（各司表列组数加总）`;
+    }
+    return `合计：${formatOpsDivideValue(roughTotal, 8)} 组（全司人数÷8）`;
+}
+
+/** 早/晚班各一栏：人数、满组；外圈块在组数不一致时高亮 */
+function applyDailyOpsMachDumpShift({
+    wrapEl,
+    machinePeople,
+    dumpingPeople,
+    machineNoteEl,
+    machineValEl,
+    dumpingNoteEl,
+    dumpingValEl,
+    machineProvidedEl,
+    dumpingProvidedEl,
+}) {
+    const gM = Math.floor(machinePeople / 6);
+    const gD = Math.floor(dumpingPeople / 3);
+    const rM = machinePeople % 6;
+    const rD = dumpingPeople % 3;
+
+    if (machineNoteEl) {
+        machineNoteEl.textContent =
+            machinePeople > 0 ? `${machinePeople} 人 · 余 ${rM} 人` : '计划 0 人';
+    }
+    if (dumpingNoteEl) {
+        dumpingNoteEl.textContent =
+            dumpingPeople > 0 ? `${dumpingPeople} 人 · 余 ${rD} 人` : '计划 0 人';
+    }
+    if (machineValEl) machineValEl.textContent = `${gM} 组`;
+    if (dumpingValEl) dumpingValEl.textContent = `${gD} 组`;
+    if (machineProvidedEl) {
+        machineProvidedEl.textContent =
+            machinePeople > 0 ? `合计满组：${gM} 组（全司人数÷6 向下取整）` : '';
+    }
+    if (dumpingProvidedEl) {
+        dumpingProvidedEl.textContent =
+            dumpingPeople > 0 ? `合计满组：${gD} 组（全司人数÷3 向下取整）` : '';
+    }
+
+    const hasAny = machinePeople > 0 || dumpingPeople > 0;
+    const mismatch = hasAny && gM !== gD;
+
+    if (wrapEl) {
+        wrapEl.classList.remove('daily-ops-shift-block--warn', 'daily-ops-shift-block--ok');
+        if (hasAny) {
+            wrapEl.classList.add(mismatch ? 'daily-ops-shift-block--warn' : 'daily-ops-shift-block--ok');
+        }
+    }
+
+    return { hasAny, mismatch, gM, gD };
+}
+
+function updateDailyOpsPanel(filteredRows) {
+    syncDailyOpsDaySelect();
+
+    const metaEl = document.getElementById('daily-ops-meta');
+    const pickEl = document.getElementById('daily-ops-pick-count');
+    const forkAmEl = document.getElementById('daily-ops-forklift-am');
+    const forkPmEl = document.getElementById('daily-ops-forklift-pm');
+    const sel = document.getElementById('daily-ops-day-select');
+    if (!metaEl) return;
+
+    const dayKey = sel && sel.value && WEEK_DAYS.includes(sel.value) ? sel.value : null;
+
+    const labels = getWeekDatesFromBase(getScheduleWeekBaseDate());
+    const monSched = getMondayDateOfScheduleWeek();
+    const sunSched = new Date(monSched);
+    sunSched.setDate(monSched.getDate() + 6);
+    const metaParts = [];
+
+    const weekSpan = `核对周 ${formatShortMd(monSched)}～${formatShortMd(sunSched)}`;
+    const curWeekHint = isScheduleWeekCalendarCurrentWeek() ? ' · 即当前自然周（与今天同一周）' : '';
+    metaParts.push(weekSpan + curWeekHint);
+
+    const idx0 = dayKey ? WEEK_DAYS.indexOf(dayKey) : -1;
+    const cal0 = idx0 >= 0 ? labels[idx0] : '—';
+    metaParts.push(`核对列：${dayKey || '—'}（${cal0}）`);
+
+    const filterBits = [];
+    if (state.currentCompany !== 'ALL') filterBits.push(`公司=${state.currentCompany}`);
+    if (state.currentPayType !== 'ALL') filterBits.push(`计薪=${state.currentPayType}`);
+    if (state.shiftQueries.length || state.shiftQuery.trim()) filterBits.push('班次关键词');
+    if (state.searchQuery.trim()) filterBits.push('岗位关键词');
+    if (filterBits.length) metaParts.push(`与上方合计相同，已应用：${filterBits.join('，')}`);
+
+    metaEl.textContent = metaParts.join(' · ');
+
+    const resetMachDumpShiftBlocks = () => {
+        document.querySelectorAll('#daily-ops-panel .daily-ops-company-lines').forEach((el) => {
+            el.innerHTML = '';
+        });
+        document.querySelectorAll('#daily-ops-panel .daily-ops-provided-groups').forEach((el) => {
+            el.textContent = '';
+        });
+        ['daily-ops-shift-wrap-am', 'daily-ops-shift-wrap-pm'].forEach((id) => {
+            const w = document.getElementById(id);
+            if (w) w.classList.remove('daily-ops-shift-block--warn', 'daily-ops-shift-block--ok');
+        });
+        const ids = [
+            'daily-ops-machine-am-note', 'daily-ops-machine-am-val',
+            'daily-ops-dumping-am-note', 'daily-ops-dumping-am-val',
+            'daily-ops-machine-pm-note', 'daily-ops-machine-pm-val',
+            'daily-ops-dumping-pm-note', 'daily-ops-dumping-pm-val',
+        ];
+        ids.forEach((rid) => {
+            const n = document.getElementById(rid);
+            if (!n) return;
+            if (rid.includes('-note')) n.textContent = '—';
+            else n.textContent = '—';
+        });
+    };
+
+    const setDash = () => {
+        if (pickEl) pickEl.textContent = '—';
+        if (forkAmEl) forkAmEl.textContent = '—';
+        if (forkPmEl) forkPmEl.textContent = '—';
+        resetMachDumpShiftBlocks();
+    };
+
+    if (!dayKey) {
+        setDash();
+        return;
+    }
+
+    const rough = sumFilteredPlanForDay(filteredRows, dayKey, (row) => isDailyOpsPickRoughRow(row));
+
+    const forkAm = sumFilteredPlanForDay(filteredRows, dayKey, (row) => {
+        const role = String(row['岗位/工作内容'] || '').trim();
+        return role === ROLE_FORKLIFT_OPS && !isLateShiftForOps(row['班次名称']);
+    });
+
+    const forkPm = sumFilteredPlanForDay(filteredRows, dayKey, (row) => {
+        const role = String(row['岗位/工作内容'] || '').trim();
+        return role === ROLE_FORKLIFT_OPS && isLateShiftForOps(row['班次名称']);
+    });
+
+    const machineAm = sumFilteredPlanForDay(filteredRows, dayKey, (row) => {
+        const role = String(row['岗位/工作内容'] || '').trim();
+        return role === ROLE_MACHINE_OPS && !isLateShiftForOps(row['班次名称']);
+    });
+
+    const dumpingAm = sumFilteredPlanForDay(filteredRows, dayKey, (row) => {
+        return isDailyOpsDumpingRoleRow(row) && !isLateShiftForOps(row['班次名称']);
+    });
+
+    const machinePm = sumFilteredPlanForDay(filteredRows, dayKey, (row) => {
+        const role = String(row['岗位/工作内容'] || '').trim();
+        return role === ROLE_MACHINE_OPS && isLateShiftForOps(row['班次名称']);
+    });
+
+    const dumpingPm = sumFilteredPlanForDay(filteredRows, dayKey, (row) => {
+        return isDailyOpsDumpingRoleRow(row) && isLateShiftForOps(row['班次名称']);
+    });
+
+    if (pickEl) pickEl.textContent = formatOpsDivideValue(rough, 8);
+    if (forkAmEl) forkAmEl.textContent = String(forkAm);
+    if (forkPmEl) forkPmEl.textContent = String(forkPm);
+
+    const roughPred = (row) => isDailyOpsPickRoughRow(row);
+
+    const pickLinesEl = document.getElementById('daily-ops-pick-companies');
+    const forkAmLinesEl = document.getElementById('daily-ops-forklift-am-cos');
+    const forkPmLinesEl = document.getElementById('daily-ops-forklift-pm-cos');
+    renderDailyOpsCompanyLines(pickLinesEl, filteredRows, dayKey, 'rough', 'rough');
+    renderDailyOpsCompanyLines(forkAmLinesEl, filteredRows, dayKey, 'forkAm', 'fork');
+    renderDailyOpsCompanyLines(forkPmLinesEl, filteredRows, dayKey, 'forkPm', 'fork');
+
+    const machAmLines = document.getElementById('daily-ops-machine-am-cos');
+    const dumpAmLines = document.getElementById('daily-ops-dumping-am-cos');
+    const machPmLines = document.getElementById('daily-ops-machine-pm-cos');
+    const dumpPmLines = document.getElementById('daily-ops-dumping-pm-cos');
+    renderDailyOpsCompanyLines(machAmLines, filteredRows, dayKey, 'machAm', 'machine6');
+    renderDailyOpsCompanyLines(dumpAmLines, filteredRows, dayKey, 'dumpAm', 'dump3');
+    renderDailyOpsCompanyLines(machPmLines, filteredRows, dayKey, 'machPm', 'machine6');
+    renderDailyOpsCompanyLines(dumpPmLines, filteredRows, dayKey, 'dumpPm', 'dump3');
+
+    const pickProvEl = document.getElementById('daily-ops-pick-provided-groups');
+    const forkAmProvEl = document.getElementById('daily-ops-forklift-am-provided-groups');
+    const forkPmProvEl = document.getElementById('daily-ops-forklift-pm-provided-groups');
+    if (pickProvEl) pickProvEl.textContent = pickProvSummaryLine(filteredRows, dayKey, roughPred, rough);
+    if (forkAmProvEl) forkAmProvEl.textContent = forkAm > 0 ? `合计：${forkAm} 人（全司叉车早班）` : '';
+    if (forkPmProvEl) forkPmProvEl.textContent = forkPm > 0 ? `合计：${forkPm} 人（全司叉车晚班）` : '';
+
+    applyDailyOpsMachDumpShift({
+        wrapEl: document.getElementById('daily-ops-shift-wrap-am'),
+        machinePeople: machineAm,
+        dumpingPeople: dumpingAm,
+        machineNoteEl: document.getElementById('daily-ops-machine-am-note'),
+        machineValEl: document.getElementById('daily-ops-machine-am-val'),
+        dumpingNoteEl: document.getElementById('daily-ops-dumping-am-note'),
+        dumpingValEl: document.getElementById('daily-ops-dumping-am-val'),
+        machineProvidedEl: document.getElementById('daily-ops-machine-am-provided-groups'),
+        dumpingProvidedEl: document.getElementById('daily-ops-dumping-am-provided-groups'),
+    });
+
+    applyDailyOpsMachDumpShift({
+        wrapEl: document.getElementById('daily-ops-shift-wrap-pm'),
+        machinePeople: machinePm,
+        dumpingPeople: dumpingPm,
+        machineNoteEl: document.getElementById('daily-ops-machine-pm-note'),
+        machineValEl: document.getElementById('daily-ops-machine-pm-val'),
+        dumpingNoteEl: document.getElementById('daily-ops-dumping-pm-note'),
+        dumpingValEl: document.getElementById('daily-ops-dumping-pm-val'),
+        machineProvidedEl: document.getElementById('daily-ops-machine-pm-provided-groups'),
+        dumpingProvidedEl: document.getElementById('daily-ops-dumping-pm-provided-groups'),
+    });
+
 }
 
 function updateShiftHeadcountBanner(filteredRows, totalActual, checkedDays) {
@@ -2078,6 +2691,10 @@ function setAllDayFilters(checked) {
 
 function setupEventListeners() {
     setupUserMgmtEvents();
+    const dailyOpsPanel = document.getElementById('daily-ops-panel');
+    if (dailyOpsPanel) {
+        dailyOpsPanel.addEventListener('change', onDailyOpsCompanyGroupsChange);
+    }
     elements.companyFilter.addEventListener('change', (e) => { state.currentCompany = e.target.value; renderTable(); });
     if (elements.payTypeFilter) {
         elements.payTypeFilter.addEventListener('change', (e) => {
@@ -2163,7 +2780,9 @@ function setupEventListeners() {
     });
     if (elements.weekStartDate) {
         elements.weekStartDate.addEventListener('change', (e) => {
-            state.weekStartDate = e.target.value;
+            const mon = mondayYmdFromCalendarDate(e.target.value);
+            state.weekStartDate = mon || String(e.target.value || '').trim();
+            if (mon) elements.weekStartDate.value = mon;
             renderTable();
         });
     }

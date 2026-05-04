@@ -1236,8 +1236,402 @@ body {
 body.screenshot-active .toolbar,
 body.screenshot-active .header,
 body.screenshot-active .stats-grid,
+body.screenshot-active .daily-ops-panel,
 body.screenshot-active .shift-headcount-banner {
     display: none;
+}
+
+.daily-ops-panel {
+    background: linear-gradient(135deg, #eef2ff, #f8fafc);
+    border: 1px solid #c7d2fe;
+    border-radius: 14px;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+}
+
+.daily-ops-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.daily-ops-heading {
+    flex: 1 1 280px;
+}
+
+.daily-ops-title {
+    font-size: 16px;
+    font-weight: 800;
+    color: #312e81;
+    margin-bottom: 4px;
+}
+
+.daily-ops-desc {
+    font-size: 12px;
+    color: #475569;
+    line-height: 1.45;
+    max-width: 720px;
+}
+
+.daily-ops-meta {
+    font-size: 11px;
+    color: var(--muted);
+    font-weight: 600;
+    text-align: right;
+    flex: 0 1 220px;
+    line-height: 1.35;
+}
+
+.daily-ops-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+}
+
+.daily-ops-day-label {
+    font-size: 12px;
+    font-weight: 700;
+    color: #312e81;
+}
+
+.daily-ops-day-select {
+    min-width: 160px;
+    padding: 6px 10px;
+    border-radius: 10px;
+    border: 1px solid #a5b4fc;
+    background: #fff;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.daily-ops-day-select:focus {
+    outline: 2px solid #818cf8;
+    outline-offset: 1px;
+}
+
+.daily-ops-grid {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    gap: 8px;
+    overflow-x: auto;
+    overflow-y: visible;
+    padding-bottom: 6px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+}
+
+.daily-ops-grid > .daily-ops-card {
+    flex: 0 0 auto;
+    width: 196px;
+    min-width: 196px;
+    align-self: stretch;
+    height: auto;
+}
+
+.daily-ops-grid-full {
+    flex: 0 0 auto;
+    min-width: 0;
+    align-self: stretch;
+    min-height: 100%;
+}
+
+.daily-ops-mach-dump-section {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    gap: 8px;
+    min-height: 100%;
+}
+
+.daily-ops-shift-block {
+    display: flex;
+    flex-direction: column;
+    align-self: stretch;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 8px 10px 10px;
+    background: #f8fafc;
+    flex: 0 0 auto;
+    width: fit-content;
+    max-width: min(100%, calc(100vw - 32px));
+    min-width: 0;
+    box-sizing: border-box;
+    min-height: 100%;
+}
+
+.daily-ops-shift-block--warn {
+    border-color: #fb923c;
+    background: linear-gradient(180deg, #fff7ed, #fffdfb);
+    box-shadow: 0 1px 2px rgba(251, 146, 60, 0.2);
+}
+
+.daily-ops-shift-block--ok {
+    border-color: #86efac;
+    background: linear-gradient(180deg, #f0fdf4, #fafefa);
+}
+
+.daily-ops-shift-heading {
+    font-size: 12px;
+    font-weight: 800;
+    color: #1e3a5f;
+    margin-bottom: 6px;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-wrap: break-word;
+    line-height: 1.3;
+}
+
+.daily-ops-shift-cards {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 8px;
+    width: fit-content;
+    box-sizing: border-box;
+    flex: 1 1 auto;
+    min-height: 0;
+    align-items: stretch;
+}
+
+.daily-ops-shift-cards .daily-ops-card-compact {
+    flex: 0 0 auto;
+    width: 148px;
+    min-width: 148px;
+    max-width: 148px;
+    align-self: stretch;
+}
+
+.daily-ops-metric-key {
+    font-size: 10px;
+    font-weight: 800;
+    color: #64748b;
+    letter-spacing: 0.02em;
+    margin-top: 3px;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-wrap: break-word;
+}
+
+.daily-ops-company-lines {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    margin-top: 4px;
+    margin-bottom: 2px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    font-size: 10px;
+    font-weight: 600;
+    color: #475569;
+    line-height: 1.35;
+}
+
+.daily-ops-company-lines-empty {
+    color: #94a3b8;
+    font-weight: 600;
+}
+
+.daily-ops-company-line {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-wrap: wrap;
+    width: 100%;
+    min-width: 0;
+}
+
+.daily-ops-company-name {
+    flex: 1 1 48px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.daily-ops-company-groups-input {
+    width: 50px;
+    max-width: 42%;
+    flex: 0 0 auto;
+    padding: 2px 5px;
+    font-size: 11px;
+    font-weight: 700;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #fff;
+    color: #0f172a;
+    box-sizing: border-box;
+}
+
+.daily-ops-company-groups-input:focus {
+    outline: 2px solid #818cf8;
+    outline-offset: 0;
+}
+
+.daily-ops-company-unit {
+    flex: 0 0 auto;
+    font-size: 10px;
+    color: #64748b;
+    font-weight: 700;
+}
+
+.daily-ops-company-readonly {
+    font-weight: 700;
+    color: #334155;
+    min-width: 2em;
+    text-align: right;
+}
+
+.daily-ops-provided-wrap {
+    margin-top: 2px;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+}
+
+.daily-ops-provided-groups {
+    font-size: 10px;
+    font-weight: 700;
+    color: #1e40af;
+    line-height: 1.35;
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-wrap: break-word;
+    word-break: break-word;
+}
+
+.daily-ops-card-compact {
+    min-height: 118px;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    height: 100%;
+}
+
+.daily-ops-value-sm {
+    font-size: 19px;
+}
+
+.daily-ops-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px 11px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-height: 88px;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+.daily-ops-card-emphasis {
+    border-color: #818cf8;
+    box-shadow: 0 1px 0 rgba(99, 102, 241, 0.12);
+}
+
+.daily-ops-card-verify {
+    min-height: auto;
+}
+
+.daily-ops-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #334155;
+    line-height: 1.25;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-wrap: break-word;
+}
+
+.daily-ops-note {
+    font-size: 10px;
+    color: var(--muted);
+    font-weight: 600;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-wrap: break-word;
+    line-height: 1.3;
+}
+
+.daily-ops-value {
+    font-size: 22px;
+    font-weight: 800;
+    color: var(--primary-strong);
+    letter-spacing: -0.02em;
+    margin-top: auto;
+    line-height: 1.1;
+}
+
+.daily-ops-verify-text {
+    font-size: 18px;
+    margin-top: 4px;
+}
+
+.daily-ops-verify-ok {
+    color: #047857;
+}
+
+.daily-ops-verify-bad {
+    color: #b91c1c;
+}
+
+.daily-ops-verify-muted {
+    color: var(--muted);
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.daily-ops-hint {
+    font-size: 11px;
+    color: var(--muted);
+    font-weight: 600;
+    line-height: 1.35;
+    margin-top: 4px;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-wrap: break-word;
+}
+
+.daily-ops-card-verify.daily-ops-verify-card-ok {
+    border-color: #6ee7b7;
+    background: linear-gradient(180deg, #f0fdf4, #fff);
+}
+
+.daily-ops-card-verify.daily-ops-verify-card-bad {
+    border-color: #fca5a5;
+    background: linear-gradient(180deg, #fef2f2, #fff);
 }
 
 .shift-headcount-banner {

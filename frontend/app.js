@@ -550,15 +550,6 @@ function closeChangeReasonModal() {
     if (elements.changeReasonModalBody) elements.changeReasonModalBody.textContent = '';
 }
 
-function appendPlanChangeReason(row, day, oldValue, newValue, reasonText) {
-    const now = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    const dateText = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-    const record = `${dateText} ${day} 计划 ${oldValue}→${newValue}：${reasonText.trim()}`;
-    const existing = getChangeReason(row);
-    row['变化原因'] = existing ? `${record} | ${existing}` : record;
-}
-
 /** 各日「计划」「实到」与库字段一致：按人数存、按人数显示（1:1），不按备注还原「组数」或做 ÷8 折算，避免出现小数或非整数组表示。 */
 
 function getRawDayValue(row, day, type) {
@@ -851,6 +842,8 @@ function clearHistoryView() {
 }
 
 const WEEK_DAYS = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日'];
+/** 主表列筛选与「当日换算」核对列默认：自然周第 2 天（星期二） */
+const DEFAULT_VISIBLE_WEEKDAY = WEEK_DAYS[1];
 
 /** 将 YYYY-MM-DD 解析为本地日历日当天 12:00，避免仅日期串被当作 UTC 午夜导致周几错位 */
 function parseYmdToLocalNoon(ymd) {
@@ -947,10 +940,6 @@ function ymdFromLocalDate(d) {
     return `${y}-${mo}-${da}`;
 }
 
-function isScheduleWeekCalendarCurrentWeek() {
-    return getMondayDateOfScheduleWeek().getTime() === getCalendarMondayThisWeek().getTime();
-}
-
 let _dailyOpsDaySelectBound = false;
 
 function syncDailyOpsDaySelect() {
@@ -969,15 +958,8 @@ function syncDailyOpsDaySelect() {
         sel.value = keep;
         state.dailyOpsCheckDay = keep;
     } else {
-        const today = new Date();
-        today.setHours(12, 0, 0, 0);
-        let pick = WEEK_DAYS[0];
-        if (isScheduleWeekCalendarCurrentWeek()) {
-            const diffDays = Math.round((today.getTime() - monSched.getTime()) / 86400000);
-            if (diffDays >= 0 && diffDays <= 6) pick = WEEK_DAYS[diffDays];
-        }
-        sel.value = pick;
-        state.dailyOpsCheckDay = pick;
+        sel.value = DEFAULT_VISIBLE_WEEKDAY;
+        state.dailyOpsCheckDay = DEFAULT_VISIBLE_WEEKDAY;
     }
     if (!_dailyOpsDaySelectBound) {
         _dailyOpsDaySelectBound = true;
@@ -1582,6 +1564,9 @@ const ROLE_MACHINE_OPS = 'Machine include warpping & cleaning';
 const ROLE_DUMPING_OPS = 'Dumping & cleaning';
 const ROLE_FORKLIFT_OPS = 'Forklift Driver';
 const ROLE_PICK_SORT_TABLE_OPS = '人工分拣台-粗分';
+/** 拣桌卡片只读同步：该岗位在 14:30 / 16:30 下班次计划人数，单位「人」 */
+const ROLE_PICK_CBS_CBT_OPS = '人工分拣台-CBS&CBT';
+const PICK_CBS_CBT_SYNC_START_MINUTES = [14 * 60 + 30, 16 * 60 + 30];
 
 /** 早晚班 Machine 看板（6 人/组）：含固定岗位名及 Sorting Machine、分拣机 */
 function isDailyOpsMachineRoleRow(row) {
@@ -1606,6 +1591,33 @@ function isDailyOpsDumpingRoleRow(row) {
 function isDailyOpsPickRoughRow(row) {
     if (!row || typeof row !== 'object') return false;
     return String(row['岗位/工作内容'] || '').trim() === ROLE_PICK_SORT_TABLE_OPS;
+}
+
+function isDailyOpsPickCbsCbtRoleRow(row) {
+    if (!row || typeof row !== 'object') return false;
+    return String(row['岗位/工作内容'] || '').trim() === ROLE_PICK_CBS_CBT_OPS;
+}
+
+/** CBS&CBT 且班次解析起始时刻为 14:30 或 16:30（与拣桌卡片同步行一致） */
+function isDailyOpsPickCbsCbtSyncSlotRow(row) {
+    if (!isDailyOpsPickCbsCbtRoleRow(row)) return false;
+    const m = shiftStartMinutesForSort(row['班次名称']);
+    if (m === null) return false;
+    return PICK_CBS_CBT_SYNC_START_MINUTES.includes(m);
+}
+
+function isDailyOpsPickCbsCbtSlotMinutesRow(row, minutes) {
+    return isDailyOpsPickCbsCbtSyncSlotRow(row) && shiftStartMinutesForSort(row['班次名称']) === minutes;
+}
+
+/** 拣桌卡片标题后缀：粗分 + CBS&CBT(14:30/16:30) 涉及班次时刻 */
+function isDailyOpsPickCardShiftContextRow(row) {
+    return isDailyOpsPickRoughRow(row) || isDailyOpsPickCbsCbtSyncSlotRow(row);
+}
+
+/** 拣桌卡片内：该公司行按人数显示/编辑，不按 8 人/组换算（劳务公司名称，不区分大小写） */
+function isPickRoughHeadcountLaborCompany(companyName) {
+    return /^direct\s*job$/i.test(String(companyName || '').trim());
 }
 
 /** 出库侧：岗位名称含「出库」 */
@@ -1657,6 +1669,10 @@ function isDailyOpsForkliftOtherFixedSlotRow(row) {
 /** 当日换算看板：按行筛选类型，与 updateDailyOpsPanel 中条件一致 */
 function getDailyOpsPredicate(predKind) {
     switch (String(predKind || '')) {
+        case 'pickCbs1430':
+            return (row) => isDailyOpsPickCbsCbtSlotMinutesRow(row, PICK_CBS_CBT_SYNC_START_MINUTES[0]);
+        case 'pickCbs1630':
+            return (row) => isDailyOpsPickCbsCbtSlotMinutesRow(row, PICK_CBS_CBT_SYNC_START_MINUTES[1]);
         case 'rough':
             return (row) => isDailyOpsPickRoughRow(row);
         case 'forkAm6':
@@ -1690,6 +1706,8 @@ function getDailyOpsPredicate(predKind) {
 
 function dailyOpsPredicateLabel(predKind) {
     const map = {
+        pickCbs1430: '14:30 计划人数',
+        pickCbs1630: '16:30 计划人数',
         rough: '人工分拣台-粗分→拣桌',
         forkAm6: '叉车 早班 06：00',
         forkAm8: '叉车 早班 08：00',
@@ -2305,17 +2323,7 @@ function updatePlan(input, rowUid, day) {
         renderTable();
         return;
     }
-    const oldDisplayValue = getDisplayDayValue(row, day, 'plan');
     const value = parseFloat(input.value) || 0;
-    if (value !== oldDisplayValue) {
-        const reason = window.prompt(`请填写变化原因（${day} 计划 ${oldDisplayValue}→${value}）`);
-        if (!reason || !reason.trim()) {
-            alert('未填写变化原因，本次修改已取消。');
-            input.value = oldDisplayValue;
-            return;
-        }
-        appendPlanChangeReason(row, day, oldDisplayValue, value, reason);
-    }
     setRawDayValueFromDisplay(row, day, 'plan', value);
     enqueuePersistLaborToDb();
     renderTable(); // Re-render to refresh subtotal and variance styles
@@ -2483,6 +2491,21 @@ function sumFilteredPlanForDay(rows, dayKey, predicate) {
     return s;
 }
 
+/** 分拣粗分岗位：计划人数拆成「可折算拣桌组」与「Direct Job 按人」两类（主数字只对前者 ÷8） */
+function sumPickRoughPlanSplitForDesk(rows, dayKey) {
+    let convertible = 0;
+    let directJob = 0;
+    rows.forEach((row) => {
+        if (!row || typeof row !== 'object') return;
+        if (!isDailyOpsPickRoughRow(row)) return;
+        const p = getDisplayDayValue(row, dayKey, 'plan');
+        const co = String(row['劳务公司/归属'] || '').trim();
+        if (isPickRoughHeadcountLaborCompany(co)) directJob += p;
+        else convertible += p;
+    });
+    return { convertible, directJob };
+}
+
 function rowNoteIndicatesGroupUnit(row) {
     const t = String(getRowNote(row) || '');
     return t.includes('组');
@@ -2503,9 +2526,36 @@ function buildDailyOpsCompanyMap(rows, dayKey, predicate) {
     return m;
 }
 
-function getDailyOpsCompanyDisplayInputValue(entry, mode) {
+/** 拣桌卡片：CBS&CBT 在 14:30、16:30 的计划人数按公司汇总（只读同步） */
+function buildPickCbsCbtSyncByCompany(rows, dayKey) {
+    const m = new Map();
+    rows.forEach((row) => {
+        if (!row || typeof row !== 'object') return;
+        if (!isDailyOpsPickCbsCbtSyncSlotRow(row)) return;
+        const co = String(row['劳务公司/归属'] || '').trim();
+        if (!co) return;
+        const mins = shiftStartMinutesForSort(row['班次名称']);
+        const label = mins === 14 * 60 + 30 ? '14:30' : '16:30';
+        if (!m.has(co)) m.set(co, []);
+        const arr = m.get(co);
+        let bucket = arr.find((b) => b.label === label);
+        if (!bucket) {
+            bucket = { label, people: 0, rows: [] };
+            arr.push(bucket);
+        }
+        bucket.people += getDisplayDayValue(row, dayKey, 'plan');
+        bucket.rows.push(row);
+    });
+    m.forEach((arr) => arr.sort((a, b) => a.label.localeCompare(b.label, 'zh-CN')));
+    return m;
+}
+
+function getDailyOpsCompanyDisplayInputValue(entry, mode, laborCompany) {
     const { people, rows } = entry;
     if (mode === 'rough') {
+        if (laborCompany && isPickRoughHeadcountLaborCompany(laborCompany)) {
+            return String(Math.max(0, Math.round(people)));
+        }
         if (rows.length && rows.every(rowNoteIndicatesGroupUnit)) {
             return String(Math.max(0, Math.round(people)));
         }
@@ -2520,13 +2570,16 @@ function getDailyOpsCompanyDisplayInputValue(entry, mode) {
     return '0';
 }
 
-function parseDailyOpsInputToPlanTotal(mode, rowsForCompany, rawStr) {
+function parseDailyOpsInputToPlanTotal(mode, rowsForCompany, rawStr, laborCompany) {
     const g = parseFloat(String(rawStr ?? '').replace(/,/g, '').trim());
     const n = Number.isFinite(g) ? g : 0;
     if (mode === 'fork') return Math.max(0, Math.round(n));
     if (mode === 'machine6') return Math.max(0, Math.round(n)) * 6;
     if (mode === 'dump3') return Math.max(0, Math.round(n)) * 3;
     if (mode === 'rough') {
+        if (laborCompany && isPickRoughHeadcountLaborCompany(laborCompany)) {
+            return Math.max(0, Math.round(n));
+        }
         const allGroup = rowsForCompany.length && rowsForCompany.every(rowNoteIndicatesGroupUnit);
         if (allGroup) return Math.max(0, Math.round(n));
         return Math.max(0, Math.round(n * 8));
@@ -2547,7 +2600,6 @@ function renderDailyOpsCompanyLines(container, rows, dayKey, predKind, mode) {
         return;
     }
     const editable = canEditPlan() && !isViewingHistory();
-    const unitLabel = mode === 'fork' ? '人' : '组';
     [...map.entries()]
         .sort((a, b) => a[0].localeCompare(b[0], 'zh-CN'))
         .forEach(([co, entry]) => {
@@ -2563,14 +2615,18 @@ function renderDailyOpsCompanyLines(container, rows, dayKey, predKind, mode) {
             nameBtn.setAttribute('aria-label', jumpUid ? `查看 ${co} 对应班次排班` : `查看 ${co} 排班`);
             nameBtn.addEventListener('click', () => focusScheduleCompanyInTable(co, jumpUid ? { rowUid: jumpUid } : {}));
             line.appendChild(nameBtn);
-            const displayVal = getDailyOpsCompanyDisplayInputValue(entry, mode);
+            const unitLabel =
+                mode === 'fork' || (mode === 'rough' && isPickRoughHeadcountLaborCompany(co)) ? '人' : '组';
+            const displayVal = getDailyOpsCompanyDisplayInputValue(entry, mode, co);
             if (editable) {
                 const inp = document.createElement('input');
                 inp.type = 'number';
                 inp.className = 'daily-ops-company-groups-input';
                 inp.min = '0';
                 const roughPeopleMode =
-                    mode === 'rough' && !(entry.rows.length && entry.rows.every(rowNoteIndicatesGroupUnit));
+                    mode === 'rough' &&
+                    !(entry.rows.length && entry.rows.every(rowNoteIndicatesGroupUnit)) &&
+                    !isPickRoughHeadcountLaborCompany(co);
                 inp.step = roughPeopleMode ? 'any' : '1';
                 inp.value = displayVal;
                 inp.dataset.dopsPred = predKind;
@@ -2591,6 +2647,151 @@ function renderDailyOpsCompanyLines(container, rows, dayKey, predKind, mode) {
             unit.textContent = unitLabel;
             line.appendChild(unit);
             container.appendChild(line);
+        });
+}
+
+/** 拣桌卡片：粗分（可编辑组/人）+ 14:30/16:30 时段计划人数（可编辑，人；不展示岗位文案） */
+function renderPickDeskCompanyLines(container, rows, dayKey) {
+    if (!container) return;
+    container.innerHTML = '';
+    const roughPred = getDailyOpsPredicate('rough');
+    const roughMap = buildDailyOpsCompanyMap(rows, dayKey, roughPred);
+    const cbsMap = buildPickCbsCbtSyncByCompany(rows, dayKey);
+    const companies = new Set([...roughMap.keys(), ...cbsMap.keys()]);
+    if (!companies.size) {
+        const empty = document.createElement('div');
+        empty.className = 'daily-ops-company-lines-empty';
+        empty.textContent = '（无劳务公司数据）';
+        container.appendChild(empty);
+        return;
+    }
+    const editable = canEditPlan() && !isViewingHistory();
+    [...companies]
+        .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+        .forEach((co) => {
+            const roughEntry = roughMap.get(co);
+            const cbsSlots = cbsMap.get(co) || [];
+
+            if (roughEntry) {
+                const line = document.createElement('div');
+                line.className = 'daily-ops-company-line';
+                const nameBtn = document.createElement('button');
+                nameBtn.type = 'button';
+                nameBtn.className = 'daily-ops-company-name daily-ops-company-jumpbtn';
+                nameBtn.textContent = co;
+                const jumpRowR = pickPrimaryDailyOpsJumpRow(roughEntry.rows);
+                const jumpUidR = jumpRowR ? String(jumpRowR._rowUid || '').trim() : '';
+                nameBtn.title = jumpUidR
+                    ? `在排班表中定位：${co}（本条卡片对应的班次/岗位）`
+                    : `在排班表中定位：${co}`;
+                nameBtn.setAttribute(
+                    'aria-label',
+                    jumpUidR ? `查看 ${co} 对应班次排班` : `查看 ${co} 排班`
+                );
+                nameBtn.addEventListener('click', () =>
+                    focusScheduleCompanyInTable(co, jumpUidR ? { rowUid: jumpUidR } : {})
+                );
+                line.appendChild(nameBtn);
+                const unitLabel = isPickRoughHeadcountLaborCompany(co) ? '人' : '组';
+                const displayVal = getDailyOpsCompanyDisplayInputValue(roughEntry, 'rough', co);
+                if (editable) {
+                    const inp = document.createElement('input');
+                    inp.type = 'number';
+                    inp.className = 'daily-ops-company-groups-input';
+                    inp.min = '0';
+                    const roughPeopleMode =
+                        !(
+                            roughEntry.rows.length &&
+                            roughEntry.rows.every(rowNoteIndicatesGroupUnit)
+                        ) && !isPickRoughHeadcountLaborCompany(co);
+                    inp.step = roughPeopleMode ? 'any' : '1';
+                    inp.value = displayVal;
+                    inp.dataset.dopsPred = 'rough';
+                    inp.dataset.dopsMode = 'rough';
+                    inp.dataset.dopsCompany = co;
+                    inp.dataset.lastCommitted = displayVal;
+                    inp.title = `写入「${dayKey}」计划列；同一公司多条班次时合计记首行`;
+                    inp.setAttribute('aria-label', `${co} ${unitLabel}数`);
+                    line.appendChild(inp);
+                } else {
+                    const ro = document.createElement('span');
+                    ro.className = 'daily-ops-company-readonly';
+                    ro.textContent = `${displayVal} ${unitLabel}`;
+                    line.appendChild(ro);
+                }
+                const unit = document.createElement('span');
+                unit.className = 'daily-ops-company-unit';
+                unit.textContent = unitLabel;
+                line.appendChild(unit);
+                container.appendChild(line);
+            }
+
+            cbsSlots.forEach((slot, idx) => {
+                const line = document.createElement('div');
+                line.className = 'daily-ops-company-line daily-ops-pick-cbs-line';
+                if (roughEntry) line.classList.add('daily-ops-pick-cbs-line--indented');
+
+                if (!roughEntry && idx === 0) {
+                    const nameBtn = document.createElement('button');
+                    nameBtn.type = 'button';
+                    nameBtn.className = 'daily-ops-company-name daily-ops-company-jumpbtn';
+                    nameBtn.textContent = co;
+                    const jr0 = pickPrimaryDailyOpsJumpRow(slot.rows);
+                    const uid0 = jr0 ? String(jr0._rowUid || '').trim() : '';
+                    nameBtn.title = uid0
+                        ? `在排班表中定位：${co}（${slot.label}）`
+                        : `在排班表中定位：${co}`;
+                    nameBtn.addEventListener('click', () =>
+                        focusScheduleCompanyInTable(co, uid0 ? { rowUid: uid0 } : {})
+                    );
+                    line.appendChild(nameBtn);
+                }
+
+                const timeBtn = document.createElement('button');
+                timeBtn.type = 'button';
+                timeBtn.className = 'daily-ops-pick-cbs-time daily-ops-company-jumpbtn';
+                timeBtn.textContent = slot.label;
+                const jr = pickPrimaryDailyOpsJumpRow(slot.rows);
+                const juid = jr ? String(jr._rowUid || '').trim() : '';
+                timeBtn.title = juid ? `在排班表中定位 ${slot.label}` : '';
+                timeBtn.setAttribute('aria-label', `${co} ${slot.label} 排班`);
+                timeBtn.addEventListener('click', () =>
+                    focusScheduleCompanyInTable(co, juid ? { rowUid: juid } : {})
+                );
+                line.appendChild(timeBtn);
+
+                const cbsEntry = { people: slot.people, rows: slot.rows };
+                const predCbs = slot.label === '14:30' ? 'pickCbs1430' : 'pickCbs1630';
+                const displayN = getDailyOpsCompanyDisplayInputValue(cbsEntry, 'fork', co);
+
+                if (editable) {
+                    const inp = document.createElement('input');
+                    inp.type = 'number';
+                    inp.className = 'daily-ops-company-groups-input';
+                    inp.min = '0';
+                    inp.step = '1';
+                    inp.value = displayN;
+                    inp.dataset.dopsPred = predCbs;
+                    inp.dataset.dopsMode = 'fork';
+                    inp.dataset.dopsCompany = co;
+                    inp.dataset.lastCommitted = displayN;
+                    inp.title = `写入「${dayKey}」计划列；${slot.label} 时段（与粗分卡片同步）`;
+                    inp.setAttribute('aria-label', `${co} ${slot.label} 人数`);
+                    line.appendChild(inp);
+                } else {
+                    const ro = document.createElement('span');
+                    ro.className = 'daily-ops-company-readonly';
+                    ro.textContent = displayN;
+                    line.appendChild(ro);
+                }
+
+                const unit = document.createElement('span');
+                unit.className = 'daily-ops-company-unit';
+                unit.textContent = '人';
+
+                line.appendChild(unit);
+                container.appendChild(line);
+            });
         });
 }
 
@@ -2624,7 +2825,7 @@ function onDailyOpsCompanyGroupsChange(ev) {
         return;
     }
 
-    const newTotal = parseDailyOpsInputToPlanTotal(mode, matches, el.value);
+    const newTotal = parseDailyOpsInputToPlanTotal(mode, matches, el.value, company);
     const oldSum = matches.reduce((s, r) => s + getDisplayDayValue(r, dayKey, 'plan'), 0);
 
     if (newTotal === oldSum) {
@@ -2632,23 +2833,12 @@ function onDailyOpsCompanyGroupsChange(ev) {
         return;
     }
 
-    const ctxLabel = dailyOpsPredicateLabel(predKind);
-    const reason = window.prompt(
-        `请填写变化原因（${dayKey} ${ctxLabel} · ${company} 表列合计 ${oldSum}→${newTotal}）`
-    );
-    if (!reason || !reason.trim()) {
-        alert('未填写变化原因，本次修改已取消。');
-        el.value = lastCommitted;
-        return;
-    }
-    const rsn = reason.trim();
     matches.sort((a, b) => String(a._rowUid || '').localeCompare(String(b._rowUid || '')));
     const oldVals = matches.map((r) => getDisplayDayValue(r, dayKey, 'plan'));
     matches.forEach((row, i) => {
         const nv = i === 0 ? newTotal : 0;
         const ov = oldVals[i];
         if (ov !== nv) {
-            appendPlanChangeReason(row, dayKey, ov, nv, rsn);
             setRawDayValueFromDisplay(row, dayKey, 'plan', nv);
         }
     });
@@ -2728,7 +2918,8 @@ function collectDailyOpsShiftTimeLabels(rows, dayKey, rowPredicate, maxTimes = 6
 function formatDailyOpsShiftTimesSuffix(rows, dayKey, rowPredicate) {
     const parts = collectDailyOpsShiftTimeLabels(rows, dayKey, rowPredicate);
     if (!parts.length) return '';
-    return ` · ${parts.join('、')}`;
+    const half = parts.map((p) => String(p).replace(/：/g, ':').replace(/，/g, ',').replace(/；/g, ';'));
+    return `, ${half.join(', ')}`;
 }
 
 function setDailyOpsShiftTimeSuffix(elId, rows, dayKey, rowPredicate) {
@@ -2794,7 +2985,7 @@ function updateDailyOpsPanel(filteredRows) {
         return;
     }
 
-    const rough = sumFilteredPlanForDay(filteredRows, dayKey, (row) => isDailyOpsPickRoughRow(row));
+    const roughSplit = sumPickRoughPlanSplitForDesk(filteredRows, dayKey);
 
     const predForkAm6 = getDailyOpsPredicate('forkAm6');
     const predForkAm8 = getDailyOpsPredicate('forkAm8');
@@ -2839,7 +3030,7 @@ function updateDailyOpsPanel(filteredRows) {
         return isDailyOpsDumpingRoleRow(row) && isLateShiftForOps(row['班次名称']);
     });
 
-    if (pickEl) pickEl.textContent = formatPickDeskGroupsDisplay(rough);
+    if (pickEl) pickEl.textContent = formatPickDeskGroupsDisplay(roughSplit.convertible);
     if (forkAm6El) forkAm6El.textContent = String(forkAm6);
     if (forkAm8El) forkAm8El.textContent = String(forkAm8);
     if (forkPm1630El) forkPm1630El.textContent = String(forkPm1630);
@@ -2858,7 +3049,7 @@ function updateDailyOpsPanel(filteredRows) {
     const predMachPm = getDailyOpsPredicate('machPm');
     const predDumpPm = getDailyOpsPredicate('dumpPm');
 
-    setDailyOpsShiftTimeSuffix('daily-ops-pick-shift-time', filteredRows, dayKey, isDailyOpsPickRoughRow);
+    setDailyOpsShiftTimeSuffix('daily-ops-pick-shift-time', filteredRows, dayKey, isDailyOpsPickCardShiftContextRow);
     setDailyOpsShiftTimeSuffix(
         'daily-ops-forklift-am-h-time',
         filteredRows,
@@ -2906,7 +3097,7 @@ function updateDailyOpsPanel(filteredRows) {
     const forkAm8LinesEl = document.getElementById('daily-ops-forklift-am8-cos');
     const forkPm1630LinesEl = document.getElementById('daily-ops-forklift-pm1630-cos');
     const forkOtherLinesEl = document.getElementById('daily-ops-forklift-other-cos');
-    renderDailyOpsCompanyLines(pickLinesEl, filteredRows, dayKey, 'rough', 'rough');
+    renderPickDeskCompanyLines(pickLinesEl, filteredRows, dayKey);
     renderDailyOpsCompanyLines(forkAm6LinesEl, filteredRows, dayKey, 'forkAm6', 'fork');
     renderDailyOpsCompanyLines(forkAm8LinesEl, filteredRows, dayKey, 'forkAm8', 'fork');
     renderDailyOpsCompanyLines(forkPm1630LinesEl, filteredRows, dayKey, 'forkPm1630', 'fork');
@@ -2939,7 +3130,12 @@ function updateDailyOpsPanel(filteredRows) {
     const forkAm8ProvEl = document.getElementById('daily-ops-forklift-am8-provided-groups');
     const forkPm1630ProvEl = document.getElementById('daily-ops-forklift-pm1630-provided-groups');
     const forkOtherProvEl = document.getElementById('daily-ops-forklift-other-provided-groups');
-    if (pickProvEl) pickProvEl.textContent = '';
+    if (pickProvEl) {
+        pickProvEl.textContent =
+            roughSplit.directJob > 0
+                ? `Direct Job 合计 ${Math.max(0, Math.round(roughSplit.directJob))} 人（不计入拣桌组）`
+                : '';
+    }
     const forkProvLine = (el, n, label) => {
         if (el) el.textContent = n > 0 ? `合计：${n} 人（${label}）` : '';
     };

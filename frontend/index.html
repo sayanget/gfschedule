@@ -34,7 +34,7 @@
         <section class="daily-ops-panel" id="daily-ops-panel" aria-live="polite">
             <div class="daily-ops-header">
                 <div class="daily-ops-heading">
-                    <h2 class="daily-ops-title">当日换算 · 本周核对</h2>
+                    <h2 class="daily-ops-title">当日换算, 本周核对</h2>
                     <div class="daily-ops-toolbar">
                         <label class="daily-ops-day-label" for="daily-ops-day-select">核对列（本周）</label>
                         <select id="daily-ops-day-select" class="daily-ops-day-select" title="仅本表周内周一～周日，与表头列一致"></select>
@@ -43,8 +43,8 @@
             </div>
             <div class="daily-ops-grid">
                 <article class="daily-ops-card daily-ops-card-emphasis">
-                    <span class="daily-ops-label">人工分拣台-粗分 → 拣桌数<span class="daily-ops-shift-time-suffix" id="daily-ops-pick-shift-time"></span></span>
-                    <div class="daily-ops-company-lines" id="daily-ops-pick-companies" aria-label="按公司：人工分拣台-粗分拣桌组数"></div>
+                    <span class="daily-ops-label">人工分拣台-粗分 -> 拣桌数<span class="daily-ops-shift-time-suffix" id="daily-ops-pick-shift-time"></span></span>
+                    <div class="daily-ops-company-lines" id="daily-ops-pick-companies" aria-label="按公司：粗分拣桌与 14:30、16:30 时段计划人数"></div>
                     <span class="daily-ops-value" id="daily-ops-pick-count">—</span>
                     <span class="daily-ops-provided-wrap">
                         <span class="daily-ops-provided-groups" id="daily-ops-pick-provided-groups"></span>
@@ -130,7 +130,7 @@
                 <div class="daily-ops-grid-full daily-ops-mach-dump-section" id="daily-ops-mach-dump-section">
                     <div class="daily-ops-shift-block daily-ops-mach-dump-merged">
                         <div class="daily-ops-mach-dump-stack" id="daily-ops-shift-wrap-am">
-                            <div class="daily-ops-shift-heading">早班 · Machine / Dumping<span class="daily-ops-shift-time-suffix" id="daily-ops-mach-heading-am-time"></span></div>
+                            <div class="daily-ops-shift-heading">早班, Machine / Dumping<span class="daily-ops-shift-time-suffix" id="daily-ops-mach-heading-am-time"></span></div>
                             <div class="daily-ops-shift-cards">
                                 <article class="daily-ops-card daily-ops-card-compact">
                                     <span class="daily-ops-label">Sorting Machine/分拣机<span class="daily-ops-shift-time-suffix" id="daily-ops-machine-am-shift-time"></span></span>
@@ -139,7 +139,7 @@
                                     <span class="daily-ops-provided-groups" id="daily-ops-machine-am-provided-groups"></span>
                                 </article>
                                 <article class="daily-ops-card daily-ops-card-compact">
-                                    <span class="daily-ops-label">Dumping 等（3 人/组）<span class="daily-ops-shift-time-suffix" id="daily-ops-dumping-am-shift-time"></span></span>
+                                    <span class="daily-ops-label">Dumping 等(3 人/组)<span class="daily-ops-shift-time-suffix" id="daily-ops-dumping-am-shift-time"></span></span>
                                     <div class="daily-ops-company-lines" id="daily-ops-dumping-am-cos"></div>
                                     <span class="daily-ops-value daily-ops-value-sm" id="daily-ops-dumping-am-val">—</span>
                                     <span class="daily-ops-provided-groups" id="daily-ops-dumping-am-provided-groups"></span>
@@ -147,7 +147,7 @@
                             </div>
                         </div>
                         <div class="daily-ops-mach-dump-stack" id="daily-ops-shift-wrap-pm">
-                            <div class="daily-ops-shift-heading">晚班 · Machine / Dumping<span class="daily-ops-shift-time-suffix" id="daily-ops-mach-heading-pm-time"></span></div>
+                            <div class="daily-ops-shift-heading">晚班, Machine / Dumping<span class="daily-ops-shift-time-suffix" id="daily-ops-mach-heading-pm-time"></span></div>
                             <div class="daily-ops-shift-cards">
                                 <article class="daily-ops-card daily-ops-card-compact">
                                     <span class="daily-ops-label">Sorting Machine/分拣机<span class="daily-ops-shift-time-suffix" id="daily-ops-machine-pm-shift-time"></span></span>
@@ -156,7 +156,7 @@
                                     <span class="daily-ops-provided-groups" id="daily-ops-machine-pm-provided-groups"></span>
                                 </article>
                                 <article class="daily-ops-card daily-ops-card-compact">
-                                    <span class="daily-ops-label">Dumping 等（3 人/组）<span class="daily-ops-shift-time-suffix" id="daily-ops-dumping-pm-shift-time"></span></span>
+                                    <span class="daily-ops-label">Dumping 等(3 人/组)<span class="daily-ops-shift-time-suffix" id="daily-ops-dumping-pm-shift-time"></span></span>
                                     <div class="daily-ops-company-lines" id="daily-ops-dumping-pm-cos"></div>
                                     <span class="daily-ops-value daily-ops-value-sm" id="daily-ops-dumping-pm-val">—</span>
                                     <span class="daily-ops-provided-groups" id="daily-ops-dumping-pm-provided-groups"></span>
@@ -244,13 +244,13 @@
                     </div>
                 </div>
                 <div class="checkbox-group" id="date-columns-filter">
-                    <label><input type="checkbox" value="星期一" checked> 一</label>
+                    <label><input type="checkbox" value="星期一"> 一</label>
                     <label><input type="checkbox" value="星期二" checked> 二</label>
-                    <label><input type="checkbox" value="星期三" checked> 三</label>
-                    <label><input type="checkbox" value="星期四" checked> 四</label>
-                    <label><input type="checkbox" value="星期五" checked> 五</label>
-                    <label><input type="checkbox" value="星期六" checked> 六</label>
-                    <label><input type="checkbox" value="星期日" checked> 日</label>
+                    <label><input type="checkbox" value="星期三"> 三</label>
+                    <label><input type="checkbox" value="星期四"> 四</label>
+                    <label><input type="checkbox" value="星期五"> 五</label>
+                    <label><input type="checkbox" value="星期六"> 六</label>
+                    <label><input type="checkbox" value="星期日"> 日</label>
                 </div>
             </div>
 

@@ -1335,6 +1335,50 @@ body.screenshot-active .shift-headcount-banner {
     outline-offset: 1px;
 }
 
+.daily-ops-copy-trigger {
+    margin-left: 2px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 8px;
+    border: 1px solid #a5b4fc;
+    background: #eef2ff;
+    color: #312e81;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.daily-ops-copy-trigger:hover:not(:disabled) {
+    background: #e0e7ff;
+}
+
+.daily-ops-copy-trigger:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.daily-ops-copy-desc {
+    margin: 0 0 0.75rem;
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.5;
+}
+
+.daily-ops-copy-targets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.1rem;
+    margin: 0.35rem 0 1rem;
+}
+
+.daily-ops-copy-targets label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    cursor: pointer;
+    font-size: 13px;
+}
+
 .daily-ops-grid {
     display: flex;
     flex-wrap: nowrap;

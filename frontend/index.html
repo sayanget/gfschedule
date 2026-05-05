@@ -38,6 +38,7 @@
                     <div class="daily-ops-toolbar">
                         <label class="daily-ops-day-label" for="daily-ops-day-select">核对列（本周）</label>
                         <select id="daily-ops-day-select" class="daily-ops-day-select" title="仅本表周内周一～周日，与表头列一致"></select>
+                        <button type="button" id="btn-daily-ops-copy-days" class="daily-ops-copy-trigger">复制到其他日期…</button>
                     </div>
                 </div>
             </div>
@@ -245,7 +246,7 @@
                 </div>
                 <div class="checkbox-group" id="date-columns-filter">
                     <label><input type="checkbox" value="星期一"> 一</label>
-                    <label><input type="checkbox" value="星期二" checked> 二</label>
+                    <label><input type="checkbox" value="星期二"> 二</label>
                     <label><input type="checkbox" value="星期三"> 三</label>
                     <label><input type="checkbox" value="星期四"> 四</label>
                     <label><input type="checkbox" value="星期五"> 五</label>
@@ -376,6 +377,19 @@
             <div class="change-reason-modal-body" id="change-reason-modal-body"></div>
             <div class="modal-actions">
                 <button type="button" class="btn btn-primary" id="change-reason-modal-close">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="daily-ops-copy-modal">
+        <div class="modal-content">
+            <h3>复制当日换算计划到其他日期</h3>
+            <p class="daily-ops-copy-desc" id="daily-ops-copy-desc"></p>
+            <span class="modal-field-label">目标列（本周）</span>
+            <div class="daily-ops-copy-targets" id="daily-ops-copy-target-checkboxes" role="group" aria-label="勾选要覆盖计划的目标星期"></div>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-outline" id="daily-ops-copy-cancel">取消</button>
+                <button type="button" class="btn btn-primary" id="daily-ops-copy-confirm">确定复制</button>
             </div>
         </div>
     </div>

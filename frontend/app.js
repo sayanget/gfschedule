@@ -448,6 +448,8 @@ function init() {
         elements.weekStartDate.value = state.weekStartDate;
     }
 
+    applyDefaultDateColumnFilterTomorrowOnly();
+
     renderTable();
     setupEventListeners();
     syncSaveButtonState();
@@ -672,6 +674,7 @@ async function persistLaborToServerOnce() {
         flushPendingRoleInputs();
         flushPendingShiftInputs();
         flushPendingPayTypeSelects();
+        flushDailyOpsPanelInputsToData();
         flushPendingDayInputs();
         ensureLaborRowUids(state.data);
         normalizeLaborRowsPayType(state.data);
@@ -842,8 +845,41 @@ function clearHistoryView() {
 }
 
 const WEEK_DAYS = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日'];
-/** 主表列筛选与「当日换算」核对列默认：自然周第 2 天（星期二） */
-const DEFAULT_VISIBLE_WEEKDAY = WEEK_DAYS[1];
+
+function getLocalTomorrowNoon() {
+    const t = new Date();
+    return new Date(t.getFullYear(), t.getMonth(), t.getDate() + 1, 12, 0, 0, 0);
+}
+
+/** 当前表周周一至周日中与本地日历日 anchor 同一天的那一列；不在本周则 null */
+function getScheduleWeekDayLabelForCalendarDate(anchor) {
+    const mon = getMondayDateOfScheduleWeek();
+    let target = null;
+    if (anchor instanceof Date && !Number.isNaN(anchor.getTime())) {
+        target = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate(), 12, 0, 0, 0);
+    }
+    if (!target || !mon || Number.isNaN(mon.getTime())) return null;
+    const diff = Math.round((target.getTime() - mon.getTime()) / 86400000);
+    if (diff >= 0 && diff <= 6) return WEEK_DAYS[diff];
+    return null;
+}
+
+/** 「显示日期」与「当日换算」默认：表周内对应本地「明天」的列；若明天不在本周则按星期名对齐列（如周日看盘时次日已入下一日历周）。 */
+function getDefaultTomorrowDisplayDayLabel() {
+    const tomorrow = getLocalTomorrowNoon();
+    const inWeek = getScheduleWeekDayLabelForCalendarDate(tomorrow);
+    if (inWeek) return inWeek;
+    const dow = tomorrow.getDay();
+    return WEEK_DAYS[(dow + 6) % 7];
+}
+
+function applyDefaultDateColumnFilterTomorrowOnly() {
+    if (!elements.dateFilterContainer) return;
+    const label = getDefaultTomorrowDisplayDayLabel();
+    elements.dateFilterContainer.querySelectorAll('input[type="checkbox"]').forEach((box) => {
+        box.checked = box.value === label;
+    });
+}
 
 /** 将 YYYY-MM-DD 解析为本地日历日当天 12:00，避免仅日期串被当作 UTC 午夜导致周几错位 */
 function parseYmdToLocalNoon(ymd) {
@@ -958,8 +994,9 @@ function syncDailyOpsDaySelect() {
         sel.value = keep;
         state.dailyOpsCheckDay = keep;
     } else {
-        sel.value = DEFAULT_VISIBLE_WEEKDAY;
-        state.dailyOpsCheckDay = DEFAULT_VISIBLE_WEEKDAY;
+        const def = getDefaultTomorrowDisplayDayLabel();
+        sel.value = def;
+        state.dailyOpsCheckDay = def;
     }
     if (!_dailyOpsDaySelectBound) {
         _dailyOpsDaySelectBound = true;
@@ -1703,6 +1740,13 @@ function getDailyOpsPredicate(predKind) {
             return () => false;
     }
 }
+
+/** 「复制到其他日期」涵盖的非拣桌专项卡片类型（拣桌卡的 rough/CBS 由 collectPickDeskCompanyPredSnapshots） */
+const DAILY_OPS_STANDARD_PRED_KINDS = [
+    'forkAm6', 'forkAm8', 'forkPm1630', 'forkOther',
+    'outAm', 'inAm', 'outPm', 'inPm',
+    'machAm', 'dumpAm', 'machPm', 'dumpPm',
+];
 
 function dailyOpsPredicateLabel(predKind) {
     const map = {
@@ -2795,6 +2839,211 @@ function renderPickDeskCompanyLines(container, rows, dayKey) {
         });
 }
 
+function tryCommitDailyOpsInput(el) {
+    if (!(el instanceof HTMLInputElement) || !el.classList.contains('daily-ops-company-groups-input')) {
+        return false;
+    }
+    if (!canEditPlan() || isViewingHistory()) return false;
+    const sel = document.getElementById('daily-ops-day-select');
+    const dayKey = sel && WEEK_DAYS.includes(sel.value) ? sel.value : null;
+    if (!dayKey) return false;
+    const company = String(el.dataset.dopsCompany || '').trim();
+    const predKind = String(el.dataset.dopsPred || '');
+    const mode = String(el.dataset.dopsMode || '');
+    const lastCommitted = String(el.dataset.lastCommitted ?? '');
+    if (!company || !predKind || !mode) return false;
+    if (String(el.value) === lastCommitted) return false;
+
+    const predicate = getDailyOpsPredicate(predKind);
+    const rows = getFilteredData();
+    const matches = rows.filter(
+        (r) => r && predicate(r) && String(r['劳务公司/归属'] || '').trim() === company
+    );
+    if (!matches.length) {
+        el.value = lastCommitted;
+        return false;
+    }
+
+    const newTotal = parseDailyOpsInputToPlanTotal(mode, matches, el.value, company);
+    const oldSum = matches.reduce((s, r) => s + getDisplayDayValue(r, dayKey, 'plan'), 0);
+
+    if (newTotal === oldSum) {
+        el.dataset.lastCommitted = String(el.value);
+        return false;
+    }
+
+    matches.sort((a, b) => String(a._rowUid || '').localeCompare(String(b._rowUid || '')));
+    const oldVals = matches.map((r) => getDisplayDayValue(r, dayKey, 'plan'));
+    matches.forEach((row, i) => {
+        const nv = i === 0 ? newTotal : 0;
+        const ov = oldVals[i];
+        if (ov !== nv) {
+            setRawDayValueFromDisplay(row, dayKey, 'plan', nv);
+        }
+    });
+    el.dataset.lastCommitted = String(el.value);
+    return true;
+}
+
+function flushDailyOpsPanelInputsToData() {
+    let any = false;
+    document.querySelectorAll('#daily-ops-panel .daily-ops-company-groups-input').forEach((inp) => {
+        if (tryCommitDailyOpsInput(inp)) any = true;
+    });
+    return any;
+}
+
+function collectPickDeskCompanyPredSnapshots(rows, fromDay) {
+    const roughPred = getDailyOpsPredicate('rough');
+    const roughMap = buildDailyOpsCompanyMap(rows, fromDay, roughPred);
+    const cbsMap = buildPickCbsCbtSyncByCompany(rows, fromDay);
+    const snaps = [];
+    roughMap.forEach((entry, co) => {
+        snaps.push({ company: co, predKind: 'rough', total: entry.people });
+    });
+    cbsMap.forEach((slots, co) => {
+        slots.forEach((slot) => {
+            const predCbs = slot.label === '14:30' ? 'pickCbs1430' : 'pickCbs1630';
+            snaps.push({ company: co, predKind: predCbs, total: slot.people });
+        });
+    });
+    return snaps;
+}
+
+function collectStandardPredSnapshots(rows, fromDay) {
+    const snaps = [];
+    DAILY_OPS_STANDARD_PRED_KINDS.forEach((predKind) => {
+        const predicate = getDailyOpsPredicate(predKind);
+        const map = buildDailyOpsCompanyMap(rows, fromDay, predicate);
+        map.forEach((entry, co) => {
+            snaps.push({ company: co, predKind, total: entry.people });
+        });
+    });
+    return snaps;
+}
+
+function applyDailyOpsPlanTotalFirstRow(matches, dayKey, total) {
+    matches.sort((a, b) => String(a._rowUid || '').localeCompare(String(b._rowUid || '')));
+    const oldVals = matches.map((r) => getDisplayDayValue(r, dayKey, 'plan'));
+    let changed = false;
+    matches.forEach((row, i) => {
+        const nv = i === 0 ? total : 0;
+        const ov = oldVals[i];
+        if (ov !== nv) {
+            setRawDayValueFromDisplay(row, dayKey, 'plan', nv);
+            changed = true;
+        }
+    });
+    return changed;
+}
+
+function copyDailyOpsPlanConfigToTargetDays(targetWeekdays) {
+    flushDailyOpsPanelInputsToData();
+    const fromDay = state.dailyOpsCheckDay;
+    if (!fromDay || !WEEK_DAYS.includes(fromDay)) {
+        alert('请先选择当前「核对列」作为复制来源。');
+        return;
+    }
+    const uniq = [];
+    const seen = new Set();
+    (Array.isArray(targetWeekdays) ? targetWeekdays : []).forEach((d) => {
+        if (!WEEK_DAYS.includes(d) || d === fromDay || seen.has(d)) return;
+        seen.add(d);
+        uniq.push(d);
+    });
+    if (!uniq.length) {
+        alert('请至少勾选一项与来源不同的目标日期。');
+        return;
+    }
+    if (!canEditPlan() || isViewingHistory()) {
+        alert('当前不可编辑计划（无权限或正在查看历史快照）。');
+        return;
+    }
+    const rows = getFilteredData();
+    const allSnaps = [
+        ...collectPickDeskCompanyPredSnapshots(rows, fromDay),
+        ...collectStandardPredSnapshots(rows, fromDay),
+    ];
+    let anyChange = false;
+    uniq.forEach((toDay) => {
+        allSnaps.forEach(({ company, predKind, total }) => {
+            const predicate = getDailyOpsPredicate(predKind);
+            const matches = rows.filter(
+                (r) => r && predicate(r) && String(r['劳务公司/归属'] || '').trim() === company
+            );
+            if (!matches.length) return;
+            if (applyDailyOpsPlanTotalFirstRow(matches, toDay, total)) anyChange = true;
+        });
+    });
+    if (!anyChange) {
+        alert('没有可写入的变更（目标列已有相同计划，或无匹配行）。');
+        return;
+    }
+    enqueuePersistLaborToDb();
+    renderTable();
+}
+
+function openDailyOpsCopyModal() {
+    const modal = document.getElementById('daily-ops-copy-modal');
+    const desc = document.getElementById('daily-ops-copy-desc');
+    const wrap = document.getElementById('daily-ops-copy-target-checkboxes');
+    if (!modal || !desc || !wrap) return;
+    if (!canEditPlan() || isViewingHistory()) {
+        alert('当前不可使用复制（需在最新数据且具有计划编辑权限）。');
+        return;
+    }
+    const fromDay = state.dailyOpsCheckDay;
+    if (!fromDay || !WEEK_DAYS.includes(fromDay)) {
+        alert('请先选择核对列（复制来源）。');
+        return;
+    }
+    const base = getScheduleWeekBaseDate();
+    const dates = getWeekDatesFromBase(base);
+    const fromIdx = WEEK_DAYS.indexOf(fromDay);
+    const dateSuffix = fromIdx >= 0 ? `（${dates[fromIdx]}）` : '';
+    desc.textContent =
+        `将当前核对列「${fromDay}${dateSuffix}」在各卡片中的计划人数汇总写入下方勾选的列；不修改「实到」。来源列为灰色不可选。`;
+    wrap.innerHTML = '';
+    WEEK_DAYS.forEach((d, i) => {
+        const label = document.createElement('label');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.value = d;
+        if (d === fromDay) {
+            cb.disabled = true;
+            cb.checked = false;
+        }
+        label.appendChild(cb);
+        label.append(` ${d}（${dates[i]}）`);
+        wrap.appendChild(label);
+    });
+    modal.classList.add('active');
+}
+
+function closeDailyOpsCopyModal() {
+    const modal = document.getElementById('daily-ops-copy-modal');
+    if (modal) modal.classList.remove('active');
+}
+
+function confirmDailyOpsCopyModal() {
+    const wrap = document.getElementById('daily-ops-copy-target-checkboxes');
+    if (!wrap) {
+        closeDailyOpsCopyModal();
+        return;
+    }
+    const targets = [...wrap.querySelectorAll('input[type="checkbox"]:checked')].map((i) => i.value);
+    closeDailyOpsCopyModal();
+    copyDailyOpsPlanConfigToTargetDays(targets);
+}
+
+function updateDailyOpsCopyButtonState() {
+    const btn = document.getElementById('btn-daily-ops-copy-days');
+    if (!btn) return;
+    const ok = canEditPlan() && !isViewingHistory();
+    btn.disabled = !ok;
+    btn.title = ok ? '把当前核对列的计划人数汇总复制到其他星期（不复制实到）' : '需在最新数据且具有计划编辑权限';
+}
+
 function onDailyOpsCompanyGroupsChange(ev) {
     const el = ev.target;
     if (!(el instanceof HTMLInputElement) || !el.classList.contains('daily-ops-company-groups-input')) return;
@@ -2808,41 +3057,7 @@ function onDailyOpsCompanyGroupsChange(ev) {
         renderTable();
         return;
     }
-    const company = String(el.dataset.dopsCompany || '').trim();
-    const predKind = String(el.dataset.dopsPred || '');
-    const mode = String(el.dataset.dopsMode || '');
-    const lastCommitted = String(el.dataset.lastCommitted ?? '');
-    if (!company || !predKind || !mode) return;
-    if (String(el.value) === lastCommitted) return;
-
-    const predicate = getDailyOpsPredicate(predKind);
-    const rows = getFilteredData();
-    const matches = rows.filter(
-        (r) => r && predicate(r) && String(r['劳务公司/归属'] || '').trim() === company
-    );
-    if (!matches.length) {
-        el.value = lastCommitted;
-        return;
-    }
-
-    const newTotal = parseDailyOpsInputToPlanTotal(mode, matches, el.value, company);
-    const oldSum = matches.reduce((s, r) => s + getDisplayDayValue(r, dayKey, 'plan'), 0);
-
-    if (newTotal === oldSum) {
-        el.dataset.lastCommitted = String(el.value);
-        return;
-    }
-
-    matches.sort((a, b) => String(a._rowUid || '').localeCompare(String(b._rowUid || '')));
-    const oldVals = matches.map((r) => getDisplayDayValue(r, dayKey, 'plan'));
-    matches.forEach((row, i) => {
-        const nv = i === 0 ? newTotal : 0;
-        const ov = oldVals[i];
-        if (ov !== nv) {
-            setRawDayValueFromDisplay(row, dayKey, 'plan', nv);
-        }
-    });
-    el.dataset.lastCommitted = String(el.value);
+    if (!tryCommitDailyOpsInput(el)) return;
     enqueuePersistLaborToDb();
     renderTable();
 }
@@ -2982,6 +3197,7 @@ function updateDailyOpsPanel(filteredRows) {
 
     if (!dayKey) {
         setDash();
+        updateDailyOpsCopyButtonState();
         return;
     }
 
@@ -3175,6 +3391,7 @@ function updateDailyOpsPanel(filteredRows) {
         dumpingProvidedEl: document.getElementById('daily-ops-dumping-pm-provided-groups'),
     });
 
+    updateDailyOpsCopyButtonState();
 }
 
 function updateShiftHeadcountBanner(filteredRows, totalActual, checkedDays) {
@@ -3240,6 +3457,20 @@ function setupEventListeners() {
     if (dailyOpsPanel) {
         dailyOpsPanel.addEventListener('change', onDailyOpsCompanyGroupsChange);
     }
+    const btnDailyOpsCopy = document.getElementById('btn-daily-ops-copy-days');
+    if (btnDailyOpsCopy) {
+        btnDailyOpsCopy.addEventListener('click', () => openDailyOpsCopyModal());
+    }
+    const dailyOpsCopyModal = document.getElementById('daily-ops-copy-modal');
+    if (dailyOpsCopyModal) {
+        dailyOpsCopyModal.addEventListener('click', (e) => {
+            if (e.target === dailyOpsCopyModal) closeDailyOpsCopyModal();
+        });
+    }
+    const dailyOpsCopyCancel = document.getElementById('daily-ops-copy-cancel');
+    const dailyOpsCopyConfirm = document.getElementById('daily-ops-copy-confirm');
+    if (dailyOpsCopyCancel) dailyOpsCopyCancel.addEventListener('click', closeDailyOpsCopyModal);
+    if (dailyOpsCopyConfirm) dailyOpsCopyConfirm.addEventListener('click', confirmDailyOpsCopyModal);
     elements.companyFilter.addEventListener('change', (e) => { state.currentCompany = e.target.value; renderTable(); });
     if (elements.payTypeFilter) {
         elements.payTypeFilter.addEventListener('change', (e) => {
@@ -3349,6 +3580,11 @@ function setupEventListeners() {
         if (e.key === 'Escape') {
             if (elements.changeReasonModal && elements.changeReasonModal.classList.contains('active')) {
                 closeChangeReasonModal();
+                return;
+            }
+            const dopCopyModal = document.getElementById('daily-ops-copy-modal');
+            if (dopCopyModal && dopCopyModal.classList.contains('active')) {
+                closeDailyOpsCopyModal();
                 return;
             }
             if (document.body.classList.contains('screenshot-active')) {

@@ -310,12 +310,15 @@
     <div class="modal" id="add-record-modal">
         <div class="modal-content modal-wide">
             <h3>新增排班记录</h3>
-            <label class="modal-field-label" for="add-company">劳务公司</label>
-            <input type="text" id="add-company" placeholder="例如：J&S">
-            <label class="modal-field-label" for="add-shift">班次名称</label>
-            <input type="text" id="add-shift" placeholder="默认：常规班次">
-            <label class="modal-field-label" for="add-role">岗位内容（必填）</label>
-            <input type="text" id="add-role" placeholder="岗位或工作内容">
+            <label class="modal-field-label" for="add-company">劳务公司（可从下拉选已有，或自行输入）</label>
+            <input type="text" id="add-company" list="add-company-options" placeholder="例如：J&S（点击或输入字符可选已有公司）" autocomplete="off">
+            <datalist id="add-company-options"></datalist>
+            <label class="modal-field-label" for="add-shift">班次名称（可从下拉选已有，或自行输入）</label>
+            <input type="text" id="add-shift" list="add-shift-options" placeholder="默认：常规班次（点击或输入字符可选已有班次）" autocomplete="off">
+            <datalist id="add-shift-options"></datalist>
+            <label class="modal-field-label" for="add-role">岗位内容（必填，可从下拉选已有，或自行输入）</label>
+            <input type="text" id="add-role" list="add-role-options" placeholder="岗位或工作内容（点击或输入字符可选已有岗位）" autocomplete="off">
+            <datalist id="add-role-options"></datalist>
             <label class="modal-field-label" for="add-note">备注（可选）</label>
             <textarea id="add-note" rows="3" placeholder="说明、组数等（支持多行、较长文本）"></textarea>
             <div class="modal-actions">

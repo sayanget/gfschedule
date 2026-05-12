@@ -1024,12 +1024,39 @@ function createEmptyRecordRow(company, shift, role, note) {
     return row;
 }
 
+function populateAddRecordDatalists() {
+    const rows = getActiveRows();
+    const fillDatalist = (id, values) => {
+        const dl = document.getElementById(id);
+        if (!dl) return;
+        dl.innerHTML = '';
+        values.forEach((text) => {
+            const opt = document.createElement('option');
+            opt.value = text;
+            dl.appendChild(opt);
+        });
+    };
+    const companies = [...new Set(rows.map((r) => String(r['劳务公司/归属'] ?? '').trim()))]
+        .filter(Boolean)
+        .sort((a, b) => a.localeCompare(b, 'zh-CN'));
+    const shifts = [...new Set(rows.map((r) => String(r['班次名称'] ?? '').replace(/\s+/g, ' ').trim()))]
+        .filter(Boolean)
+        .sort((a, b) => a.localeCompare(b, 'zh-CN'));
+    const roles = [...new Set(rows.map((r) => String(r['岗位/工作内容'] ?? '').replace(/\s+/g, ' ').trim()))]
+        .filter(Boolean)
+        .sort((a, b) => a.localeCompare(b, 'zh-CN'));
+    fillDatalist('add-company-options', companies);
+    fillDatalist('add-shift-options', shifts);
+    fillDatalist('add-role-options', roles);
+}
+
 function openAddRecordModal() {
     if (!elements.addRecordModal) return;
     if (elements.addCompany) elements.addCompany.value = '';
     if (elements.addShift) elements.addShift.value = '';
     if (elements.addRole) elements.addRole.value = '';
     if (elements.addNote) elements.addNote.value = '';
+    populateAddRecordDatalists();
     elements.addRecordModal.classList.add('active');
     if (elements.addCompany) elements.addCompany.focus();
 }

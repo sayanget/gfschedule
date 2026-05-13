@@ -1630,16 +1630,15 @@ const ROLE_FORKLIFT_OPS = 'Forklift Driver';
 const ROLE_PICK_SORT_TABLE_OPS = '人工分拣台-粗分';
 /** 拣桌卡片只读同步：该岗位在 14:30 / 16:30 下班次计划人数，单位「人」 */
 const ROLE_PICK_CBS_CBT_OPS = '人工分拣台-CBS&CBT';
-const PICK_CBS_CBT_SYNC_START_MINUTES = [14 * 60 + 30, 16 * 60 + 30];
+const PICK_CBS_CBT_SYNC_START_MINUTES = [14 * 60 + 30, 15 * 60 + 30, 16 * 60 + 30, 17 * 60];
 
 /** 早晚班 Machine 看板（6 人/组）：含固定岗位名及 Sorting Machine、分拣机 */
 function isDailyOpsMachineRoleRow(row) {
     if (!row || typeof row !== 'object') return false;
     const r = String(row['岗位/工作内容'] || '').trim();
-    if (r === ROLE_MACHINE_OPS) return true;
-    if (r.includes('Sorting Machine')) return true;
-    if (r.includes('分拣机')) return true;
-    return false;
+
+    // 根据用户最新要求，分拣机卡片仅统计岗位名称精确为 "Sorting Machine 分拣机" 的数据
+    return r === 'Sorting Machine 分拣机' || r === 'Sorting Machine' || r === '分拣机';
 }
 
 /** 早晚班 Machine/Dumping 看板：Dumping 小卡汇总岗位（3 人/组）；Sorting Machine/分拣机计入 Machine */
@@ -1647,6 +1646,7 @@ function isDailyOpsDumpingRoleRow(row) {
     if (!row || typeof row !== 'object') return false;
     const r = String(row['岗位/工作内容'] || '').trim();
     if (r === ROLE_DUMPING_OPS) return true;
+    if (r === ROLE_MACHINE_OPS) return true; // 将原先分拣机卡片中的 Machine include... 岗位归入此处
     if (r.includes('供包员')) return true;
     return false;
 }
@@ -1654,12 +1654,21 @@ function isDailyOpsDumpingRoleRow(row) {
 /** 拣桌换算：岗位为「人工分拣台-粗分」的计划人数列 */
 function isDailyOpsPickRoughRow(row) {
     if (!row || typeof row !== 'object') return false;
-    return String(row['岗位/工作内容'] || '').trim() === ROLE_PICK_SORT_TABLE_OPS;
+    const isRole = String(row['岗位/工作内容'] || '').trim() === ROLE_PICK_SORT_TABLE_OPS;
+    const isPiecework = String(row['计薪类型'] || '').trim() === '计件';
+    return isRole && isPiecework;
 }
 
 function isDailyOpsPickCbsCbtRoleRow(row) {
     if (!row || typeof row !== 'object') return false;
-    return String(row['岗位/工作内容'] || '').trim() === ROLE_PICK_CBS_CBT_OPS;
+    const r = String(row['岗位/工作内容'] || '').trim();
+    const isPiecework = String(row['计薪类型'] || '').trim() === '计件';
+    if (!isPiecework) return false;
+
+    if (r === ROLE_PICK_CBS_CBT_OPS) return true;
+    // 兼容包含 Chute table 或 人工分拣台回流 的岗位名，但由于计件过滤，计时岗位会自动排除
+    if (r.includes('Chute table') || r.includes('人工分拣台回流')) return true;
+    return false;
 }
 
 /** CBS&CBT 且班次解析起始时刻为 14:30 或 16:30（与拣桌卡片同步行一致） */
@@ -1667,6 +1676,7 @@ function isDailyOpsPickCbsCbtSyncSlotRow(row) {
     if (!isDailyOpsPickCbsCbtRoleRow(row)) return false;
     const m = shiftStartMinutesForSort(row['班次名称']);
     if (m === null) return false;
+    // 检查是否在用户指定的 14:30, 15:30, 16:30, 17:00 时间段内
     return PICK_CBS_CBT_SYNC_START_MINUTES.includes(m);
 }
 
@@ -2606,7 +2616,10 @@ function buildPickCbsCbtSyncByCompany(rows, dayKey) {
         const co = String(row['劳务公司/归属'] || '').trim();
         if (!co) return;
         const mins = shiftStartMinutesForSort(row['班次名称']);
-        const label = mins === 14 * 60 + 30 ? '14:30' : '16:30';
+        // 动态生成时间标签，支持 14:30, 15:30, 16:30, 17:00 等
+        const hh = Math.floor(mins / 60).toString().padStart(2, '0');
+        const mm = (mins % 60).toString().padStart(2, '0');
+        const label = `${hh}:${mm}`;
         if (!m.has(co)) m.set(co, []);
         const arr = m.get(co);
         let bucket = arr.find((b) => b.label === label);
